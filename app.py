@@ -70,7 +70,7 @@ def importar():
 @app.route('/api/empresa/<path:cnpj>', methods=['PUT'])
 def editar(cnpj):
     data=request.json or {}
-    allowed=['razao_social','nome_fantasia','situacao','cnae','logradouro','numero','complemento','bairro','cep','municipio','uf','telefone','email','status_visita','observacoes']
+    allowed=['razao_social','nome_fantasia','situacao','cnae','logradouro','numero','complemento','bairro','cep','municipio','uf','telefone','email','status_visita','dia_mes_sse','observacoes']
     patch={k:data[k] for k in allowed if k in data}
     status = patch.get('status_visita')
     now=datetime.now(timezone.utc).isoformat()
