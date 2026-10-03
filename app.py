@@ -304,11 +304,19 @@ def grafico_diagnostico(cnpj):
     public=f'{SUPABASE_URL}/storage/v1/object/public/fachadas/{path}'
     return jsonify({'ok':True,'url':public})
 
+@app.route('/api/diagnostico/<path:cnpj>',methods=['GET'])
+def obter_diagnostico(cnpj):
+    c=fmt(cnpj)
+    r=requests.get(url(DIAG_TABLE),headers=sb_headers(),params={'cnpj':f'eq.{c}','select':'*','order':'criado_em.desc','limit':'1'},timeout=20)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    rows=r.json()
+    return jsonify({'diagnostico':rows[0] if rows else None})
+
 @app.route('/api/diagnostico',methods=['POST'])
 def salvar_diagnostico():
     b=request.json or {}; c=fmt(b.get('cnpj'))
     if not get_one(c):return jsonify({'erro':'Empresa não encontrada.'}),404
-    payload={'cnpj':c,'segmento':b.get('segmento',''),'respostas':b.get('respostas',{}),'areas_criticas':b.get('areas_criticas',[]),'problemas':b.get('problemas',[]),'solucoes':b.get('solucoes',[]),'mensagem':b.get('mensagem','')}
+    payload={'cnpj':c,'segmento':b.get('segmento',''),'respostas':b.get('respostas',{}),'areas_criticas':b.get('areas_criticas',[]),'problemas':b.get('problemas',[]),'solucoes':b.get('solucoes',[]),'tributacao':b.get('tributacao',{}),'mensagem':b.get('mensagem','')}
     r=requests.post(url(DIAG_TABLE),headers=sb_headers('return=representation'),json=payload,timeout=25)
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify({'ok':True,'diagnostico':r.json()[0]})
