@@ -142,7 +142,16 @@ def empresas():
             if not cnpjs:return jsonify([])
             r=requests.get(url(TABLE),headers=sb_headers(),params={'cnpj':'in.('+','.join('"'+c+'"' for c in cnpjs)+')','select':'*','order':'nome_fantasia.asc.nullslast,razao_social.asc'},timeout=25)
         else:r=requests.get(url(TABLE),headers=sb_headers(),params={'select':'*','order':'nome_fantasia.asc.nullslast,razao_social.asc'},timeout=25)
-        r.raise_for_status();return jsonify(r.json())
+        r.raise_for_status(); rows=r.json()
+        # Marca empresas que já possuem pelo menos um diagnóstico salvo.
+        # Se a tabela de diagnósticos estiver temporariamente indisponível, a lista continua funcionando.
+        try:
+            dr=requests.get(url(DIAG_TABLE),headers=sb_headers(),params={'select':'cnpj'},timeout=20)
+            diag_cnpjs={x.get('cnpj') for x in dr.json()} if dr.ok else set()
+        except Exception:
+            diag_cnpjs=set()
+        for x in rows:x['diagnosticado']=x.get('cnpj') in diag_cnpjs
+        return jsonify(rows)
     except Exception as e:return jsonify({'erro':str(e)}),500
 
 @app.route('/api/importar',methods=['POST'])
@@ -316,8 +325,17 @@ def obter_diagnostico(cnpj):
 def salvar_diagnostico():
     b=request.json or {}; c=fmt(b.get('cnpj'))
     if not get_one(c):return jsonify({'erro':'Empresa não encontrada.'}),404
-    payload={'cnpj':c,'segmento':b.get('segmento',''),'respostas':b.get('respostas',{}),'areas_criticas':b.get('areas_criticas',[]),'problemas':b.get('problemas',[]),'solucoes':b.get('solucoes',[]),'tributacao':b.get('tributacao',{}),'mensagem':b.get('mensagem','')}
+    respostas=b.get('respostas',{}) or {}
+    tributacao=b.get('tributacao',{}) or {}
+    # Cópia de segurança dentro de respostas: mantém a tributação persistida mesmo antes do cache
+    # do PostgREST reconhecer a coluna tributacao.
+    respostas['_tributacao']=tributacao
+    payload={'cnpj':c,'segmento':b.get('segmento',''),'respostas':respostas,'areas_criticas':b.get('areas_criticas',[]),'problemas':b.get('problemas',[]),'solucoes':b.get('solucoes',[]),'tributacao':tributacao,'mensagem':b.get('mensagem','')}
     r=requests.post(url(DIAG_TABLE),headers=sb_headers('return=representation'),json=payload,timeout=25)
+    # Compatibilidade: se o PostgREST ainda não enxergar a coluna, salva sem ela em vez de bloquear o atendimento.
+    if not r.ok and ('tributacao' in r.text and ('PGRST204' in r.text or 'schema cache' in r.text)):
+        payload.pop('tributacao',None)
+        r=requests.post(url(DIAG_TABLE),headers=sb_headers('return=representation'),json=payload,timeout=25)
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify({'ok':True,'diagnostico':r.json()[0]})
 
