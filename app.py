@@ -11,6 +11,11 @@ TABLE = os.getenv('SUPABASE_TABLE', 'empresas_atendimento')
 LIST_TABLE = os.getenv('SUPABASE_LIST_TABLE', 'listas_atendimento')
 LINK_TABLE = os.getenv('SUPABASE_LINK_TABLE', 'empresas_listas')
 
+AREA_TABLE = os.getenv('SUPABASE_AREA_TABLE', 'portfolio_areas')
+TIPO_TABLE = os.getenv('SUPABASE_TIPO_TABLE', 'portfolio_tipos')
+SOLUCAO_TABLE = os.getenv('SUPABASE_SOLUCAO_TABLE', 'portfolio_solucoes')
+DIAG_TABLE = os.getenv('SUPABASE_DIAG_TABLE', 'diagnosticos_empresa')
+
 def sb_headers(prefer=None):
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError('Configure SUPABASE_URL e SUPABASE_KEY no provedor.')
@@ -236,6 +241,60 @@ def atualizar_posicao_mapa():
             else: erros.append({'cnpj':c,'erro':r.text[:160]})
         except Exception as e: erros.append({'cnpj':c,'erro':str(e)})
     return jsonify({'ok':True,'atualizados':atualizados,'erros':erros,'latitude':lat,'longitude':lon})
+
+
+@app.route('/api/portfolio/catalogo')
+def portfolio_catalogo():
+    try:
+        a=requests.get(url(AREA_TABLE),headers=sb_headers(),params={'select':'*','order':'nome.asc'},timeout=20);a.raise_for_status()
+        t=requests.get(url(TIPO_TABLE),headers=sb_headers(),params={'select':'*','order':'nome.asc'},timeout=20);t.raise_for_status()
+        s=requests.get(url(SOLUCAO_TABLE),headers=sb_headers(),params={'select':'*','order':'nome.asc'},timeout=20);s.raise_for_status()
+        return jsonify({'areas':a.json(),'tipos':t.json(),'solucoes':s.json()})
+    except Exception as e:return jsonify({'erro':str(e)}),500
+
+@app.route('/api/portfolio/<kind>',methods=['POST'])
+def portfolio_categoria_criar(kind):
+    table=AREA_TABLE if kind=='area' else TIPO_TABLE if kind=='tipo' else None
+    if not table:return jsonify({'erro':'Categoria inválida'}),404
+    nome=((request.json or {}).get('nome') or '').strip()
+    if not nome:return jsonify({'erro':'Informe o nome.'}),400
+    r=requests.post(url(table),headers=sb_headers('resolution=ignore-duplicates,return=representation'),params={'on_conflict':'nome'},json={'nome':nome},timeout=20)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify({'ok':True,'item':(r.json()[0] if r.json() else {'nome':nome})})
+
+@app.route('/api/portfolio/<kind>/<int:item_id>',methods=['DELETE'])
+def portfolio_categoria_apagar(kind,item_id):
+    table=AREA_TABLE if kind=='area' else TIPO_TABLE if kind=='tipo' else None
+    if not table:return jsonify({'erro':'Categoria inválida'}),404
+    r=requests.delete(url(table),headers=sb_headers('return=minimal'),params={'id':f'eq.{item_id}'},timeout=20)
+    if not r.ok:return jsonify({'erro':'Não foi possível excluir. Verifique se há soluções usando esta categoria.'}),409
+    return jsonify({'ok':True})
+
+@app.route('/api/portfolio/solucao',methods=['POST'])
+def portfolio_solucao_criar():
+    b=request.json or {}
+    try: area_id=int(b.get('area_id')); tipo_id=int(b.get('tipo_id'))
+    except Exception:return jsonify({'erro':'Selecione área e tipo.'}),400
+    nome=(b.get('nome') or '').strip().upper(); link=(b.get('link') or '').strip()
+    if not nome:return jsonify({'erro':'Informe o nome da solução.'}),400
+    r=requests.post(url(SOLUCAO_TABLE),headers=sb_headers('return=representation'),json={'area_id':area_id,'tipo_id':tipo_id,'nome':nome,'link':link},timeout=20)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify({'ok':True,'item':r.json()[0]})
+
+@app.route('/api/portfolio/solucao/<int:item_id>',methods=['DELETE'])
+def portfolio_solucao_apagar(item_id):
+    r=requests.delete(url(SOLUCAO_TABLE),headers=sb_headers('return=minimal'),params={'id':f'eq.{item_id}'},timeout=20)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify({'ok':True})
+
+@app.route('/api/diagnostico',methods=['POST'])
+def salvar_diagnostico():
+    b=request.json or {}; c=fmt(b.get('cnpj'))
+    if not get_one(c):return jsonify({'erro':'Empresa não encontrada.'}),404
+    payload={'cnpj':c,'segmento':b.get('segmento',''),'respostas':b.get('respostas',{}),'areas_criticas':b.get('areas_criticas',[]),'problemas':b.get('problemas',[]),'solucoes':b.get('solucoes',[]),'mensagem':b.get('mensagem','')}
+    r=requests.post(url(DIAG_TABLE),headers=sb_headers('return=representation'),json=payload,timeout=25)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify({'ok':True,'diagnostico':r.json()[0]})
 
 @app.route('/exportar.csv')
 def exportar():
