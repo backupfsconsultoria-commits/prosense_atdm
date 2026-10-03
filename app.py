@@ -210,13 +210,32 @@ def mapa():
         base={'cnpj':e['cnpj'],'nome_fantasia':e.get('nome_fantasia') or e.get('razao_social') or '',
               'dia_mes_sse':e.get('dia_mes_sse') or '','status_visita':e.get('status_visita',0),
               'bairro':e.get('bairro') or '','logradouro':e.get('logradouro') or '','numero':e.get('numero') or '',
-              'cep':e.get('cep') or '','municipio':e.get('municipio') or '','uf':e.get('uf') or ''}
+              'cep':e.get('cep') or '','municipio':e.get('municipio') or '','uf':e.get('uf') or '',
+              'foto_url':e.get('foto_url') or ''}
         if lat is not None and lon is not None:
             base.update({'latitude':lat,'longitude':lon});pontos.append(base)
         else:
             base.update({'motivo':'Endereço não localizado','endereco_tentado':tentado});nao.append(base)
         if i<len(cnpjs)-1 and (e.get('latitude') is None or e.get('longitude') is None):time.sleep(.20)
     return jsonify({'pontos':pontos,'nao_localizados':nao,'solicitados':len(cnpjs),'localizados':len(pontos),'pendentes_localizacao':len(nao)})
+
+
+@app.route('/api/mapa/posicao',methods=['PUT'])
+def atualizar_posicao_mapa():
+    body=request.json or {}; cnpjs=body.get('cnpjs') or []
+    try: lat=float(body.get('latitude')); lon=float(body.get('longitude'))
+    except Exception:return jsonify({'erro':'Coordenadas inválidas.'}),400
+    ok,lat,lon=_valid_coord(lat,lon)
+    if not ok:return jsonify({'erro':'Coordenadas fora da área válida.'}),400
+    atualizados=[]; erros=[]
+    for c in cnpjs[:150]:
+        c=fmt(c)
+        try:
+            r=requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f'eq.{c}'},json={'latitude':lat,'longitude':lon},timeout=20)
+            if r.ok: atualizados.append(c)
+            else: erros.append({'cnpj':c,'erro':r.text[:160]})
+        except Exception as e: erros.append({'cnpj':c,'erro':str(e)})
+    return jsonify({'ok':True,'atualizados':atualizados,'erros':erros,'latitude':lat,'longitude':lon})
 
 @app.route('/exportar.csv')
 def exportar():
