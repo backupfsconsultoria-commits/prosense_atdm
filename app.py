@@ -55,6 +55,31 @@ def get_or_create_list(nome):
     if d:return d[0]
     r=requests.post(url(LIST_TABLE),headers=sb_headers('return=representation'),json={'nome':nome},timeout=25);r.raise_for_status();return r.json()[0]
 
+
+
+def _fetch_paginated(table, params=None, page_size=1000, timeout=30):
+    """Busca todas as linhas de uma tabela PostgREST sem depender de filtro IN gigante."""
+    out=[]; start=0; params=dict(params or {})
+    while True:
+        h=sb_headers(); h['Range']=f'{start}-{start+page_size-1}'
+        r=requests.get(url(table),headers=h,params=params,timeout=timeout)
+        r.raise_for_status()
+        part=r.json()
+        out.extend(part)
+        if len(part)<page_size: break
+        start += page_size
+        if start>100000: raise RuntimeError('Limite de segurança excedido ao ler registros.')
+    return out
+
+def _empresas_da_lista(lista_id):
+    """Resolve uma lista no backend sem montar cnpj=in.(...) com CNPJs formatados."""
+    links=_fetch_paginated(LINK_TABLE,{'lista_id':f'eq.{lista_id}','select':'cnpj'})
+    wanted={fmt(x.get('cnpj','')) for x in links if x.get('cnpj')}
+    if not wanted:return []
+    todas=_fetch_paginated(TABLE,{'select':'*'})
+    rows=[x for x in todas if fmt(x.get('cnpj','')) in wanted]
+    rows.sort(key=lambda x:((x.get('nome_fantasia') or '').casefold() or '\uffff',(x.get('razao_social') or '').casefold()))
+    return rows
 def link_empresa(lista_id,cnpj):
     payload={'lista_id':lista_id,'cnpj':fmt(cnpj)}
     r=requests.post(url(LINK_TABLE),headers=sb_headers('resolution=ignore-duplicates,return=minimal'),params={'on_conflict':'lista_id,cnpj'},json=payload,timeout=25)
@@ -219,16 +244,21 @@ def health(): return jsonify({'ok':True,'database':'supabase','configured':bool(
 @app.route('/api/listas')
 def listas():
     try:
-        r=requests.get(url(LIST_TABLE),headers=sb_headers(),params={'select':'*','order':'criado_em.desc'},timeout=25);r.raise_for_status();ls=r.json()
-        lr=requests.get(url(LINK_TABLE),headers=sb_headers(),params={'select':'lista_id'},timeout=25);lr.raise_for_status();links=lr.json()
+        ls=_fetch_paginated(LIST_TABLE,{'select':'*','order':'criado_em.desc'})
+        links=_fetch_paginated(LINK_TABLE,{'select':'lista_id'})
         counts={}
         for x in links: counts[x['lista_id']]=counts.get(x['lista_id'],0)+1
         for x in ls:x['total']=counts.get(x['id'],0)
         return jsonify(ls)
     except Exception as e:return jsonify({'erro':str(e)}),500
 
-@app.route('/api/lista/<int:lista_id>',methods=['PUT'])
-def renomear_lista(lista_id):
+@app.route('/api/lista/<int:lista_id>',methods=['PUT','DELETE'])
+def alterar_lista(lista_id):
+    if request.method=='DELETE':
+        # Exclui somente a lista e seus vínculos (cascade). As empresas permanecem no banco.
+        r=requests.delete(url(LIST_TABLE),headers=sb_headers('return=representation'),params={'id':f'eq.{lista_id}'},timeout=25)
+        if not r.ok:return jsonify({'erro':r.text}),500
+        return jsonify({'ok':True,'lista_id':lista_id,'empresas_preservadas':True})
     nome=((request.json or {}).get('nome') or '').strip()
     if not nome:return jsonify({'erro':'Informe o novo nome da lista.'}),400
     r=requests.patch(url(LIST_TABLE),headers=sb_headers('return=representation'),params={'id':f'eq.{lista_id}'},json={'nome':nome},timeout=25)
@@ -240,23 +270,20 @@ def empresas():
     try:
         lista_id=request.args.get('lista_id')
         if lista_id:
-            lr=requests.get(url(LINK_TABLE),headers=sb_headers(),params={'lista_id':f'eq.{lista_id}','select':'cnpj'},timeout=25);lr.raise_for_status();cnpjs=[x['cnpj'] for x in lr.json()]
-            if not cnpjs:return jsonify([])
-            r=requests.get(url(TABLE),headers=sb_headers(),params={'cnpj':'in.('+','.join('"'+c+'"' for c in cnpjs)+')','select':'*','order':'nome_fantasia.asc.nullslast,razao_social.asc'},timeout=25)
-        else:r=requests.get(url(TABLE),headers=sb_headers(),params={'select':'*','order':'nome_fantasia.asc.nullslast,razao_social.asc'},timeout=25)
-        r.raise_for_status(); rows=r.json()
+            rows=_empresas_da_lista(lista_id)
+        else:
+            rows=_fetch_paginated(TABLE,{'select':'*'})
+            rows.sort(key=lambda x:((x.get('nome_fantasia') or '').casefold() or '\uffff',(x.get('razao_social') or '').casefold()))
         # Marca empresas que já possuem pelo menos um diagnóstico salvo.
         # Se a tabela de diagnósticos estiver temporariamente indisponível, a lista continua funcionando.
         try:
-            dr=requests.get(url(DIAG_TABLE),headers=sb_headers(),params={'select':'cnpj'},timeout=20)
-            diag_cnpjs={x.get('cnpj') for x in dr.json()} if dr.ok else set()
+            diag_cnpjs={x.get('cnpj') for x in _fetch_paginated(DIAG_TABLE,{'select':'cnpj'},timeout=20)}
         except Exception:
             diag_cnpjs=set()
         for x in rows:x['diagnosticado']=x.get('cnpj') in diag_cnpjs
         # Situação comercial FS, independente do diagnóstico Sebrae.
         try:
-            pr=requests.get(url(PROSP_TABLE),headers=sb_headers(),params={'select':'cnpj,status,ultimo_contato,proximo_contato'},timeout=20)
-            pm={x.get('cnpj'):x for x in (pr.json() if pr.ok else [])}
+            pm={x.get('cnpj'):x for x in _fetch_paginated(PROSP_TABLE,{'select':'cnpj,status,ultimo_contato,proximo_contato'},timeout=20)}
         except Exception: pm={}
         for x in rows:
             px=pm.get(x.get('cnpj'),{})
@@ -506,11 +533,10 @@ def salvar_diagnostico():
 def exportar():
     lista_id=request.args.get('lista_id');rows=[]
     if lista_id:
-        lr=requests.get(url(LINK_TABLE),headers=sb_headers(),params={'lista_id':f'eq.{lista_id}','select':'cnpj'},timeout=25);lr.raise_for_status();cnpjs=[x['cnpj'] for x in lr.json()]
-        if cnpjs:
-            r=requests.get(url(TABLE),headers=sb_headers(),params={'cnpj':'in.('+','.join('"'+c+'"' for c in cnpjs)+')','select':'*','order':'nome_fantasia.asc.nullslast'},timeout=25);r.raise_for_status();rows=r.json()
+        rows=_empresas_da_lista(lista_id)
     else:
-        r=requests.get(url(TABLE),headers=sb_headers(),params={'select':'*','order':'nome_fantasia.asc.nullslast'},timeout=25);r.raise_for_status();rows=r.json()
+        rows=_fetch_paginated(TABLE,{'select':'*'})
+        rows.sort(key=lambda x:((x.get('nome_fantasia') or '').casefold() or '\uffff',(x.get('razao_social') or '').casefold()))
     out=io.StringIO();w=csv.writer(out,delimiter=';')
     if rows:
         keys=list(rows[0].keys());w.writerow(keys)
