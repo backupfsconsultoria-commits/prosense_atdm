@@ -15,6 +15,8 @@ AREA_TABLE = os.getenv('SUPABASE_AREA_TABLE', 'portfolio_areas')
 TIPO_TABLE = os.getenv('SUPABASE_TIPO_TABLE', 'portfolio_tipos')
 SOLUCAO_TABLE = os.getenv('SUPABASE_SOLUCAO_TABLE', 'portfolio_solucoes')
 DIAG_TABLE = os.getenv('SUPABASE_DIAG_TABLE', 'diagnosticos_empresa')
+PROSP_TABLE = os.getenv('SUPABASE_PROSP_TABLE', 'prospeccao_fs')
+FS_CONFIG_TABLE = os.getenv('SUPABASE_FS_CONFIG_TABLE', 'configuracoes_fs')
 
 def sb_headers(prefer=None):
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -151,6 +153,17 @@ def empresas():
         except Exception:
             diag_cnpjs=set()
         for x in rows:x['diagnosticado']=x.get('cnpj') in diag_cnpjs
+        # Situação comercial FS, independente do diagnóstico Sebrae.
+        try:
+            pr=requests.get(url(PROSP_TABLE),headers=sb_headers(),params={'select':'cnpj,status,ultimo_contato,proximo_contato,nao_contatar'},timeout=20)
+            pm={x.get('cnpj'):x for x in (pr.json() if pr.ok else [])}
+        except Exception: pm={}
+        for x in rows:
+            px=pm.get(x.get('cnpj'),{})
+            x['prospeccao_status']=px.get('status') or 'nao_abordado'
+            x['prospeccao_ultimo_contato']=px.get('ultimo_contato')
+            x['prospeccao_proximo_contato']=px.get('proximo_contato')
+            x['nao_contatar']=bool(px.get('nao_contatar'))
         return jsonify(rows)
     except Exception as e:return jsonify({'erro':str(e)}),500
 
@@ -251,6 +264,42 @@ def atualizar_posicao_mapa():
         except Exception as e: erros.append({'cnpj':c,'erro':str(e)})
     return jsonify({'ok':True,'atualizados':atualizados,'erros':erros,'latitude':lat,'longitude':lon})
 
+
+@app.route('/api/fs/config',methods=['GET','PUT'])
+def fs_config():
+    if request.method=='GET':
+        r=requests.get(url(FS_CONFIG_TABLE),headers=sb_headers(),params={'id':'eq.1','select':'*','limit':'1'},timeout=20)
+        if not r.ok:return jsonify({'erro':r.text}),500
+        d=r.json()
+        return jsonify(d[0] if d else {})
+    b=request.json or {}
+    allowed=['link_triagem','mensagem_padrao','slogan','whatsapp_escritorio']
+    payload={'id':1,**{k:b.get(k,'') for k in allowed if k in b}}
+    r=requests.post(url(FS_CONFIG_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'id'},json=payload,timeout=20)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify(r.json()[0] if r.json() else payload)
+
+@app.route('/api/prospeccao/<path:cnpj>',methods=['GET','PUT'])
+def prospeccao(cnpj):
+    c=fmt(cnpj)
+    if request.method=='GET':
+        r=requests.get(url(PROSP_TABLE),headers=sb_headers(),params={'cnpj':f'eq.{c}','select':'*','limit':'1'},timeout=20)
+        if not r.ok:return jsonify({'erro':r.text}),500
+        d=r.json(); return jsonify(d[0] if d else {'cnpj':c,'status':'nao_abordado'})
+    b=request.json or {}
+    allowed=['status','interesse','ultimo_contato','proximo_contato','observacoes','nao_contatar','consentiu_whatsapp']
+    payload={'cnpj':c,**{k:b.get(k) for k in allowed if k in b}}
+    r=requests.post(url(PROSP_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify(r.json()[0] if r.json() else payload)
+
+@app.route('/api/prospeccao/marcar-envio/<path:cnpj>',methods=['POST'])
+def marcar_envio(cnpj):
+    c=fmt(cnpj); now=datetime.now(timezone.utc).isoformat()
+    payload={'cnpj':c,'status':'apresentacao_enviada','ultimo_contato':now}
+    r=requests.post(url(PROSP_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify({'ok':True,'ultimo_contato':now})
 
 @app.route('/api/portfolio/catalogo')
 def portfolio_catalogo():
