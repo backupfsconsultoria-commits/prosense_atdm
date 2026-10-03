@@ -1,8 +1,10 @@
 from flask import Flask, render_template, request, jsonify, Response
 import os, requests, re, csv, io, time, unicodedata, uuid, mimetypes
+from openpyxl import load_workbook
 from datetime import datetime, timezone
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
 BRASIL_API = 'https://brasilapi.com.br/api/cnpj/v1/'
 BRASIL_CEP = 'https://brasilapi.com.br/api/cep/v2/'
 SUPABASE_URL = os.getenv('SUPABASE_URL', '').rstrip('/')
@@ -57,6 +59,104 @@ def link_empresa(lista_id,cnpj):
     payload={'lista_id':lista_id,'cnpj':fmt(cnpj)}
     r=requests.post(url(LINK_TABLE),headers=sb_headers('resolution=ignore-duplicates,return=minimal'),params={'on_conflict':'lista_id,cnpj'},json=payload,timeout=25)
     if not r.ok: raise Exception(f'Erro ao vincular à lista: {r.text[:200]}')
+
+
+def _norm_header(v):
+    s=unicodedata.normalize('NFKD',str(v or '')).encode('ascii','ignore').decode('ascii').lower().strip()
+    return re.sub(r'[^a-z0-9]+','_',s).strip('_')
+
+def _cell_text(v):
+    if v is None:return ''
+    if isinstance(v,datetime):return v.strftime('%d/%m/%Y')
+    if isinstance(v,float) and v.is_integer():return str(int(v))
+    return str(v).strip()
+
+def _parse_planilha(fs):
+    nome=(fs.filename or '').strip(); ext=os.path.splitext(nome.lower())[1]
+    raw=fs.read()
+    if not raw:raise ValueError('A planilha está vazia.')
+    linhas=[]
+    if ext in ('.xlsx','.xlsm'):
+        wb=load_workbook(io.BytesIO(raw),read_only=True,data_only=True)
+        ws=wb.active
+        it=ws.iter_rows(values_only=True)
+        try:cab=[_cell_text(x) for x in next(it)]
+        except StopIteration:raise ValueError('A planilha está vazia.')
+        for vals in it:
+            row=[_cell_text(x) for x in vals]
+            if any(x for x in row):linhas.append(row)
+    elif ext in ('.csv','.tsv','.txt'):
+        try:texto=raw.decode('utf-8-sig')
+        except UnicodeDecodeError:texto=raw.decode('latin-1')
+        amostra=texto[:8192]
+        if ext=='.tsv' or '\t' in amostra:delim='\t'
+        elif ';' in amostra and amostra.count(';')>=amostra.count(','):delim=';'
+        else:delim=','
+        rr=csv.reader(io.StringIO(texto),delimiter=delim)
+        try:cab=[_cell_text(x) for x in next(rr)]
+        except StopIteration:raise ValueError('A planilha está vazia.')
+        for vals in rr:
+            row=[_cell_text(x) for x in vals]
+            if any(x for x in row):linhas.append(row)
+    else:
+        raise ValueError('Formato não suportado. Use XLSX, XLSM, CSV ou TSV.')
+    if len(linhas)>20000:raise ValueError('Limite de 20.000 linhas por importação.')
+    if not cab:raise ValueError('Cabeçalho não encontrado.')
+    norm=[_norm_header(x) for x in cab]
+    if 'cnpj' not in norm:raise ValueError('A planilha precisa ter uma coluna CNPJ.')
+    saida=[];erros=[];vistos=set()
+    for idx,vals in enumerate(linhas,start=2):
+        vals=(vals+['']*len(cab))[:len(cab)]
+        original={cab[i] or f'coluna_{i+1}':vals[i] for i in range(len(cab))}
+        d={norm[i]:vals[i] for i in range(len(norm))}
+        c=digits(d.get('cnpj',''))
+        if len(c)==13:c=c.zfill(14)
+        if len(c)!=14:
+            erros.append({'linha':idx,'erro':'CNPJ inválido ou ausente'})
+            continue
+        cf=fmt(c)
+        if cf in vistos:continue
+        vistos.add(cf)
+        tipo=(d.get('tipo_logradouro') or '').strip(); log=(d.get('logradouro') or '').strip()
+        logfull=(' '.join(x for x in [tipo,log] if x)).strip()
+        cnae=(d.get('cnae') or '').strip(); ramo=(d.get('ramo_de_atividade') or '').strip()
+        cnaefull=(f'{cnae} - {ramo}' if cnae and ramo else cnae or ramo)
+        tel=(d.get('telefone1_completo') or d.get('telefone_1_completo') or d.get('telefone1') or d.get('telefone') or d.get('telefone2_completo') or '').strip()
+        payload={
+          'cnpj':cf,
+          'razao_social':d.get('razao_social',''),
+          'nome_fantasia':d.get('nome_fantasia',''),
+          'situacao':d.get('situacao',''),
+          'cnae':cnaefull,
+          'logradouro':logfull,
+          'numero':d.get('numero',''),
+          'complemento':d.get('complemento',''),
+          'bairro':d.get('bairro',''),
+          'cep':digits(d.get('cep','')),
+          'municipio':d.get('municipio',''),
+          'uf':d.get('uf',''),
+          'telefone':tel,
+          'email':d.get('e_mail','') or d.get('email',''),
+          'origem_importacao':nome,
+          'dados_importados':original,
+        }
+        saida.append(payload)
+    return saida,erros
+
+def _upsert_lote(rows,batch=200):
+    for i in range(0,len(rows),batch):
+        parte=rows[i:i+batch]
+        r=requests.post(url(TABLE),headers=sb_headers('resolution=merge-duplicates,return=minimal'),params={'on_conflict':'cnpj'},json=parte,timeout=60)
+        if not r.ok:
+            if 'dados_importados' in r.text or 'origem_importacao' in r.text:
+                raise Exception('Estrutura do banco ainda não atualizada. Execute migracao_v35.sql no Supabase e tente novamente.')
+            raise Exception(f'Falha ao salvar lote no Supabase: {r.status_code} {r.text[:350]}')
+
+def _link_lote(lista_id,cnpjs,batch=300):
+    rows=[{'lista_id':lista_id,'cnpj':c} for c in cnpjs]
+    for i in range(0,len(rows),batch):
+        r=requests.post(url(LINK_TABLE),headers=sb_headers('resolution=ignore-duplicates,return=minimal'),params={'on_conflict':'lista_id,cnpj'},json=rows[i:i+batch],timeout=60)
+        if not r.ok:raise Exception(f'Falha ao vincular empresas à lista: {r.status_code} {r.text[:300]}')
 
 def _valid_coord(lat, lon):
     try:
@@ -180,6 +280,21 @@ def importar():
         except Exception as e:erros.append({'cnpj':fmt(x),'erro':str(e)})
         if i<len(vals)-1:time.sleep(.15)
     return jsonify({'ok':ok,'erros':erros,'lista':lista})
+
+@app.route('/api/importar-planilha',methods=['POST'])
+def importar_planilha():
+    fs=request.files.get('arquivo'); nome=(request.form.get('nome_lista') or '').strip()
+    if not nome:return jsonify({'erro':'Informe o nome da lista.'}),400
+    if not fs or not fs.filename:return jsonify({'erro':'Selecione uma planilha.'}),400
+    try:
+        lista=get_or_create_list(nome)
+        rows,erros=_parse_planilha(fs)
+        if not rows:return jsonify({'erro':'Nenhuma linha válida com CNPJ foi encontrada.','erros':erros[:50]}),400
+        _upsert_lote(rows)
+        _link_lote(lista['id'],[x['cnpj'] for x in rows])
+        return jsonify({'ok':True,'lista':lista,'lidas':len(rows)+len(erros),'salvas':len(rows),'ignoradas':len(erros),'erros':erros[:50]})
+    except ValueError as e:return jsonify({'erro':str(e)}),400
+    except Exception as e:return jsonify({'erro':str(e)}),500
 
 @app.route('/api/empresa/<path:cnpj>',methods=['PUT'])
 def editar(cnpj):
