@@ -155,7 +155,7 @@ def empresas():
         for x in rows:x['diagnosticado']=x.get('cnpj') in diag_cnpjs
         # Situação comercial FS, independente do diagnóstico Sebrae.
         try:
-            pr=requests.get(url(PROSP_TABLE),headers=sb_headers(),params={'select':'cnpj,status,ultimo_contato,proximo_contato,nao_contatar'},timeout=20)
+            pr=requests.get(url(PROSP_TABLE),headers=sb_headers(),params={'select':'cnpj,status,ultimo_contato,proximo_contato'},timeout=20)
             pm={x.get('cnpj'):x for x in (pr.json() if pr.ok else [])}
         except Exception: pm={}
         for x in rows:
@@ -163,7 +163,6 @@ def empresas():
             x['prospeccao_status']=px.get('status') or 'nao_abordado'
             x['prospeccao_ultimo_contato']=px.get('ultimo_contato')
             x['prospeccao_proximo_contato']=px.get('proximo_contato')
-            x['nao_contatar']=bool(px.get('nao_contatar'))
         return jsonify(rows)
     except Exception as e:return jsonify({'erro':str(e)}),500
 
@@ -287,7 +286,7 @@ def prospeccao(cnpj):
         if not r.ok:return jsonify({'erro':r.text}),500
         d=r.json(); return jsonify(d[0] if d else {'cnpj':c,'status':'nao_abordado'})
     b=request.json or {}
-    allowed=['status','interesse','ultimo_contato','proximo_contato','observacoes','nao_contatar','consentiu_whatsapp']
+    allowed=['status','interesse','ultimo_contato','proximo_contato']
     payload={'cnpj':c,**{k:b.get(k) for k in allowed if k in b}}
     r=requests.post(url(PROSP_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
     if not r.ok:return jsonify({'erro':r.text}),500
