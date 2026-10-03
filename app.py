@@ -287,6 +287,23 @@ def portfolio_solucao_apagar(item_id):
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify({'ok':True})
 
+
+@app.route('/api/diagnostico-grafico/<path:cnpj>',methods=['POST'])
+def grafico_diagnostico(cnpj):
+    f=request.files.get('grafico')
+    if not f:return jsonify({'erro':'Gráfico não recebido.'}),400
+    data=f.read()
+    if not data or len(data)>3*1024*1024:return jsonify({'erro':'Gráfico inválido ou muito grande.'}),400
+    import time
+    clean=fmt(cnpj) or 'empresa'
+    path=f'diagnosticos/{clean}_{int(time.time())}.png'
+    storage=f'{SUPABASE_URL}/storage/v1/object/fachadas/{path}'
+    h={'apikey':SUPABASE_KEY,'Authorization':f'Bearer {SUPABASE_KEY}','Content-Type':'image/png','x-upsert':'true'}
+    r=requests.post(storage,headers=h,data=data,timeout=45)
+    if not r.ok:return jsonify({'erro':f'Falha ao enviar gráfico: {r.text[:250]}'}),500
+    public=f'{SUPABASE_URL}/storage/v1/object/public/fachadas/{path}'
+    return jsonify({'ok':True,'url':public})
+
 @app.route('/api/diagnostico',methods=['POST'])
 def salvar_diagnostico():
     b=request.json or {}; c=fmt(b.get('cnpj'))
