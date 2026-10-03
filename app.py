@@ -51,32 +51,58 @@ def link_empresa(lista_id,cnpj):
     r=requests.post(url(LINK_TABLE),headers=sb_headers('resolution=ignore-duplicates,return=minimal'),params={'on_conflict':'lista_id,cnpj'},json=payload,timeout=25)
     if not r.ok: raise Exception(f'Erro ao vincular à lista: {r.text[:200]}')
 
+def _valid_coord(lat, lon):
+    try:
+        lat=float(lat); lon=float(lon)
+        return (-34 <= lat <= 6 and -74 <= lon <= -28), lat, lon
+    except Exception:
+        return False, None, None
+
+def _nominatim(q):
+    if not q: return None, None
+    try:
+        r=requests.get('https://nominatim.openstreetmap.org/search', params={
+            'q':q, 'format':'jsonv2', 'limit':1, 'countrycodes':'br', 'addressdetails':1
+        }, headers={'User-Agent':'prosense_atdm/1.1 (field-service geocoder)'}, timeout=20)
+        if r.ok and r.json():
+            ok,lat,lon=_valid_coord(r.json()[0].get('lat'),r.json()[0].get('lon'))
+            if ok:return lat,lon
+    except Exception: pass
+    return None,None
+
 def geocode_empresa(e):
-    if e.get('latitude') is not None and e.get('longitude') is not None:
-        return e.get('latitude'),e.get('longitude')
-    cep=digits(e.get('cep'))
-    lat=lon=None
+    ok,lat,lon=_valid_coord(e.get('latitude'),e.get('longitude'))
+    if ok:return lat,lon,'cache'
+    tentativas=[]
+    log=(e.get('logradouro') or '').strip(); num=(e.get('numero') or '').strip(); bairro=(e.get('bairro') or '').strip()
+    mun=(e.get('municipio') or 'Teresina').strip(); uf=(e.get('uf') or 'PI').strip(); cep=digits(e.get('cep'))
+    if log:
+        tentativas.append(', '.join(x for x in [log,num,bairro,mun,uf,'Brasil'] if x))
+        tentativas.append(', '.join(x for x in [log,bairro,mun,uf,'Brasil'] if x))
     if len(cep)==8:
+        # Primeiro tenta o CEP no BrasilAPI; só aceita coordenadas plausíveis no Brasil.
         try:
             r=requests.get(BRASIL_CEP+cep,timeout=15)
             if r.ok:
-                c=r.json().get('location',{}).get('coordinates',{})
-                lat=c.get('latitude');lon=c.get('longitude')
+                c=r.json().get('location',{}).get('coordinates',{}) or {}
+                ok,la,lo=_valid_coord(c.get('latitude'),c.get('longitude'))
+                if ok: lat,lon=la,lo
         except Exception: pass
-    if lat is None or lon is None:
-        q=', '.join([str(e.get(k) or '').strip() for k in ('logradouro','numero','bairro','municipio','uf') if str(e.get(k) or '').strip()])
-        if q:
-            try:
-                r=requests.get('https://nominatim.openstreetmap.org/search',params={'q':q+', Brasil','format':'jsonv2','limit':1,'countrycodes':'br'},headers={'User-Agent':'prosense_atdm/1.0'},timeout=20)
-                if r.ok and r.json(): lat=float(r.json()[0]['lat']);lon=float(r.json()[0]['lon'])
-            except Exception: pass
-    try:
-        if lat is not None and lon is not None:
-            lat=float(lat);lon=float(lon)
-            requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f"eq.{e['cnpj']}"},json={'latitude':lat,'longitude':lon},timeout=15)
-            return lat,lon
-    except Exception: pass
-    return None,None
+        if lat is None: tentativas.append(f'{cep}, {mun}, {uf}, Brasil')
+    usado=''
+    if lat is None:
+        vistos=set()
+        for q in tentativas:
+            if not q or q in vistos:continue
+            vistos.add(q); usado=q
+            lat,lon=_nominatim(q)
+            if lat is not None:break
+            time.sleep(.15)
+    if lat is not None:
+        try:requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f"eq.{e['cnpj']}"},json={'latitude':lat,'longitude':lon},timeout=15)
+        except Exception:pass
+        return lat,lon,usado or 'CEP'
+    return None,None,(tentativas[0] if tentativas else 'Endereço insuficiente')
 
 @app.route('/')
 def home(): return render_template('index.html')
@@ -93,6 +119,14 @@ def listas():
         for x in ls:x['total']=counts.get(x['id'],0)
         return jsonify(ls)
     except Exception as e:return jsonify({'erro':str(e)}),500
+
+@app.route('/api/lista/<int:lista_id>',methods=['PUT'])
+def renomear_lista(lista_id):
+    nome=((request.json or {}).get('nome') or '').strip()
+    if not nome:return jsonify({'erro':'Informe o novo nome da lista.'}),400
+    r=requests.patch(url(LIST_TABLE),headers=sb_headers('return=representation'),params={'id':f'eq.{lista_id}'},json={'nome':nome},timeout=25)
+    if not r.ok:return jsonify({'erro':r.text}),500
+    return jsonify({'ok':True,'lista':(r.json()[0] if r.json() else {'id':lista_id,'nome':nome})})
 
 @app.route('/api/empresas')
 def empresas():
@@ -147,15 +181,22 @@ def apagar(cnpj):
 
 @app.route('/api/mapa',methods=['POST'])
 def mapa():
-    cnpjs=(request.json or {}).get('cnpjs',[])[:150];out=[]
+    cnpjs=(request.json or {}).get('cnpjs',[])[:150];pontos=[];nao=[]
     for i,c in enumerate(cnpjs):
         e=get_one(c)
-        if not e:continue
-        lat,lon=geocode_empresa(e)
+        if not e:
+            nao.append({'cnpj':fmt(c),'nome_fantasia':'','motivo':'Registro não encontrado','endereco_tentado':''});continue
+        lat,lon,tentado=geocode_empresa(e)
+        base={'cnpj':e['cnpj'],'nome_fantasia':e.get('nome_fantasia') or e.get('razao_social') or '',
+              'dia_mes_sse':e.get('dia_mes_sse') or '','status_visita':e.get('status_visita',0),
+              'bairro':e.get('bairro') or '','logradouro':e.get('logradouro') or '','numero':e.get('numero') or '',
+              'cep':e.get('cep') or '','municipio':e.get('municipio') or '','uf':e.get('uf') or ''}
         if lat is not None and lon is not None:
-            out.append({'cnpj':e['cnpj'],'nome_fantasia':e.get('nome_fantasia') or e.get('razao_social') or '', 'dia_mes_sse':e.get('dia_mes_sse') or '', 'status_visita':e.get('status_visita',0),'latitude':lat,'longitude':lon,'bairro':e.get('bairro') or '','logradouro':e.get('logradouro') or '','numero':e.get('numero') or ''})
-        if i<len(cnpjs)-1 and (e.get('latitude') is None or e.get('longitude') is None):time.sleep(.25)
-    return jsonify({'pontos':out,'solicitados':len(cnpjs),'localizados':len(out)})
+            base.update({'latitude':lat,'longitude':lon});pontos.append(base)
+        else:
+            base.update({'motivo':'Endereço não localizado','endereco_tentado':tentado});nao.append(base)
+        if i<len(cnpjs)-1 and (e.get('latitude') is None or e.get('longitude') is None):time.sleep(.20)
+    return jsonify({'pontos':pontos,'nao_localizados':nao,'solicitados':len(cnpjs),'localizados':len(pontos),'pendentes_localizacao':len(nao)})
 
 @app.route('/exportar.csv')
 def exportar():
