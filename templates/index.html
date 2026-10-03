@@ -201,7 +201,26 @@ let prospEmpresaAtual=null,fsConfig={};
 function fmtDataContato(v){if(!v)return '—';try{return new Date(v).toLocaleString('pt-BR')}catch(e){return v}}
 function montarMensagemFS(){let m=fsConfig.mensagem_padrao||'';return m.replaceAll('{{LINK_TRIAGEM}}',fsConfig.link_triagem||'').replaceAll('{{SLOGAN}}',fsConfig.slogan||'')}
 async function carregarConfigFS(){let r=await fetch('/api/fs/config'),j=await r.json();if(!r.ok)throw new Error(j.erro||'Erro na configuração FS');fsConfig=j||{};return fsConfig}
-async function abrirProspeccao(cnpj){if(!cnpj)return;let e=dados.find(x=>x.cnpj===cnpj);if(!e)return;prospEmpresaAtual=e;try{await carregarConfigFS();let r=await fetch('/api/prospeccao/'+encodeURIComponent(cnpj)),j=await r.json();if(!r.ok)throw new Error(j.erro||'Erro');prospEmpresa.textContent=(e.nome_fantasia||e.razao_social||'Empresa')+' — '+e.cnpj;p_status.value=j.status||'nao_abordado';p_interesse.value=j.interesse||'';p_ultimo.value=fmtDataContato(j.ultimo_contato);p_proximo.value=j.proximo_contato||'';p_obs.value=j.observacoes||'';p_nao.checked=!!j.nao_contatar;p_consentiu.checked=!!j.consentiu_whatsapp;p_msg.value=montarMensagemFS();prospBack.classList.add('open');document.body.style.overflow='hidden'}catch(err){alert(err.message)}}
+async function abrirProspeccao(cnpj){
+ if(!cnpj)return;let e=dados.find(x=>x.cnpj===cnpj);if(!e)return;
+ prospEmpresaAtual=e;
+ // V26: abre o popup imediatamente; rede/Supabase carregam depois.
+ prospEmpresa.textContent=(e.nome_fantasia||e.razao_social||'Empresa')+' — '+e.cnpj;
+ p_status.value=e.prospeccao_status||'nao_abordado';p_interesse.value='';p_ultimo.value=fmtDataContato(e.prospeccao_ultimo_contato);p_proximo.value=e.prospeccao_proximo_contato||'';p_obs.value='';p_nao.checked=!!e.nao_contatar;p_consentiu.checked=false;
+ p_msg.value='Carregando mensagem padrão...';
+ prospBack.classList.add('open');document.body.style.overflow='hidden';
+ try{
+   // Configuração e dados comerciais são independentes: buscar em paralelo reduz a espera.
+   let configPromise=(fsConfig&&Object.keys(fsConfig).length)?Promise.resolve(fsConfig):carregarConfigFS();
+   let prospPromise=fetch('/api/prospeccao/'+encodeURIComponent(cnpj)).then(async r=>{let j=await r.json();if(!r.ok)throw new Error(j.erro||'Erro ao carregar prospecção');return j});
+   let [cfg,j]=await Promise.all([configPromise,prospPromise]);
+   // Se o usuário já abriu outra empresa enquanto carregava, não mistura os dados.
+   if(!prospEmpresaAtual||prospEmpresaAtual.cnpj!==e.cnpj)return;
+   p_status.value=j.status||'nao_abordado';p_interesse.value=j.interesse||'';p_ultimo.value=fmtDataContato(j.ultimo_contato);p_proximo.value=j.proximo_contato||'';p_obs.value=j.observacoes||'';p_nao.checked=!!j.nao_contatar;p_consentiu.checked=!!j.consentiu_whatsapp;p_msg.value=montarMensagemFS();
+ }catch(err){
+   if(prospEmpresaAtual&&prospEmpresaAtual.cnpj===e.cnpj){p_msg.value=montarMensagemFS();alert('O painel abriu, mas houve demora/erro ao carregar os dados comerciais: '+err.message)}
+ }
+}
 function fecharProspeccao(){prospBack.classList.remove('open');if(!modalback.classList.contains('open'))document.body.style.overflow='';prospEmpresaAtual=null}
 async function salvarProspeccao(fechar=true){if(!prospEmpresaAtual)return false;let b={status:p_status.value,interesse:p_interesse.value,proximo_contato:p_proximo.value||null,observacoes:p_obs.value,nao_contatar:p_nao.checked,consentiu_whatsapp:p_consentiu.checked};let r=await fetch('/api/prospeccao/'+encodeURIComponent(prospEmpresaAtual.cnpj),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}),j=await r.json();if(!r.ok){alert(j.erro||'Erro ao salvar prospecção');return false}let e=dados.find(x=>x.cnpj===prospEmpresaAtual.cnpj);if(e){e.prospeccao_status=b.status;e.nao_contatar=b.nao_contatar;e.prospeccao_proximo_contato=b.proximo_contato}render();if(fechar)fecharProspeccao();return true}
 async function enviarProspeccaoWhatsApp(){if(!prospEmpresaAtual)return;if(p_nao.checked)return alert('Esta empresa está marcada como NÃO CONTATAR.');let tel=String(prospEmpresaAtual.telefone||'').replace(/\D/g,'');if(tel.length===10||tel.length===11)tel='55'+tel;if(tel.length<12)return alert('Telefone/WhatsApp vazio ou incompleto. Corrija no cadastro da empresa.');let msg=p_msg.value.trim();if(!msg)return alert('A mensagem está vazia.');let ok=await salvarProspeccao(false);if(!ok)return;let r=await fetch('/api/prospeccao/marcar-envio/'+encodeURIComponent(prospEmpresaAtual.cnpj),{method:'POST'}),j=await r.json().catch(()=>({}));if(!r.ok)return alert(j.erro||'Não foi possível registrar o envio.');p_status.value='apresentacao_enviada';p_ultimo.value=fmtDataContato(j.ultimo_contato);let e=dados.find(x=>x.cnpj===prospEmpresaAtual.cnpj);if(e)e.prospeccao_status='apresentacao_enviada';render();window.open('https://wa.me/'+tel+'?text='+encodeURIComponent(msg),'_blank')}
