@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, Response
-import os, requests, re, csv, io, time, unicodedata
+import os, requests, re, csv, io, time, unicodedata, uuid, mimetypes
 from datetime import datetime, timezone
 
 app = Flask(__name__)
@@ -172,6 +172,26 @@ def editar(cnpj):
     r=requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f'eq.{fmt(cnpj)}'},json=patch,timeout=25)
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify({'ok':True})
+
+@app.route('/api/empresa/<path:cnpj>/foto',methods=['POST'])
+def foto_empresa(cnpj):
+    f=request.files.get('foto')
+    if not f or not f.filename:return jsonify({'erro':'Selecione uma foto.'}),400
+    mime=(f.mimetype or '').lower()
+    if not mime.startswith('image/'):return jsonify({'erro':'O arquivo precisa ser uma imagem.'}),400
+    data=f.read()
+    if len(data)>8*1024*1024:return jsonify({'erro':'A foto deve ter no máximo 8 MB.'}),400
+    ext=mimetypes.guess_extension(mime) or os.path.splitext(f.filename)[1] or '.jpg'
+    if ext=='.jpe':ext='.jpg'
+    path=f"{digits(cnpj)}-{uuid.uuid4().hex[:10]}{ext}"
+    storage=f'{SUPABASE_URL}/storage/v1/object/fachadas/{path}'
+    h={'apikey':SUPABASE_KEY,'Authorization':f'Bearer {SUPABASE_KEY}','Content-Type':mime,'x-upsert':'true'}
+    r=requests.post(storage,headers=h,data=data,timeout=45)
+    if not r.ok:return jsonify({'erro':f'Falha ao enviar foto: {r.text[:250]}'}),500
+    foto_url=f'{SUPABASE_URL}/storage/v1/object/public/fachadas/{path}'
+    pr=requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f'eq.{fmt(cnpj)}'},json={'foto_url':foto_url},timeout=25)
+    if not pr.ok:return jsonify({'erro':pr.text}),500
+    return jsonify({'ok':True,'foto_url':foto_url})
 
 @app.route('/api/empresa/<path:cnpj>',methods=['DELETE'])
 def apagar(cnpj):
