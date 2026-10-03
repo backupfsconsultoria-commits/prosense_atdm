@@ -250,16 +250,17 @@ async function enviarProspeccaoWhatsApp(){
  // A mensagem vem diretamente da Configuração FS. Não existe mais caixa duplicada no popup.
  let msg=montarMensagemFS();
  if(!msg)return alert('A mensagem padrão da FS está vazia. Abra Configuração FS e salve o texto.');
- // Abre no mesmo gesto do clique para não ser bloqueado pelo navegador.
- let destino='https://web.whatsapp.com/send?phone='+tel+'&text='+encodeURIComponent(msg);
- let w=window.open(destino,'_blank');
- if(!w){window.location.assign(destino);return}
- // Registro ocorre depois e nunca impede a abertura do WhatsApp.
+ // Usa a página oficial intermediária do WhatsApp (api.whatsapp.com), como no fluxo tradicional.
+ // A navegação acontece na própria aba: não depende de pop-up e, portanto, não é bloqueada pelo navegador.
+ let destino='https://api.whatsapp.com/send/?phone='+tel+'&text='+encodeURIComponent(msg);
+ alert('O WhatsApp será aberto com a mensagem de apresentação pronta para este contato.');
+ // Dispara o registro sem segurar a navegação para o WhatsApp.
  try{
-   await salvarProspeccao(false);
-   let r=await fetch('/api/prospeccao/marcar-envio/'+encodeURIComponent(prospEmpresaAtual.cnpj),{method:'POST'}),j=await r.json().catch(()=>({}));
-   if(r.ok){p_status.value='apresentacao_enviada';p_ultimo.value=fmtDataContato(j.ultimo_contato);let e=dados.find(x=>x.cnpj===prospEmpresaAtual.cnpj);if(e)e.prospeccao_status='apresentacao_enviada';render()}
- }catch(e){console.warn('WhatsApp abriu; falhou apenas o registro do envio:',e)}
+   // keepalive permite ao navegador concluir o registro mesmo durante a saída da página.
+   fetch('/api/prospeccao/'+encodeURIComponent(prospEmpresaAtual.cnpj),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:p_status.value,interesse:p_interesse.value,proximo_contato:p_proximo.value||null}),keepalive:true}).catch(()=>{});
+   fetch('/api/prospeccao/marcar-envio/'+encodeURIComponent(prospEmpresaAtual.cnpj),{method:'POST',keepalive:true}).catch(()=>{});
+ }catch(e){console.warn('Falhou apenas o registro do envio:',e)}
+ window.location.assign(destino);
 }
 async function abrirConfigFS(){try{await carregarConfigFS();fs_link.value=fsConfig.link_triagem||'';fs_slogan.value=fsConfig.slogan||'';fs_whatsapp.value=fsConfig.whatsapp_escritorio||'';fs_mensagem.value=fsConfig.mensagem_padrao||'';configFSBack.classList.add('open')}catch(e){alert(e.message)}}
 function fecharConfigFS(){configFSBack.classList.remove('open')}
