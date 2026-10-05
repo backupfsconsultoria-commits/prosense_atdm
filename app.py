@@ -19,6 +19,7 @@ SOLUCAO_TABLE = os.getenv('SUPABASE_SOLUCAO_TABLE', 'portfolio_solucoes')
 DIAG_TABLE = os.getenv('SUPABASE_DIAG_TABLE', 'diagnosticos_empresa')
 PROSP_TABLE = os.getenv('SUPABASE_PROSP_TABLE', 'prospeccao_fs')
 FS_CONFIG_TABLE = os.getenv('SUPABASE_FS_CONFIG_TABLE', 'configuracoes_fs')
+ATEND_CONTABIL_TABLE = os.getenv('SUPABASE_ATEND_CONTABIL_TABLE', 'atendimento_contabil_fs')
 
 def sb_headers(prefer=None):
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -283,13 +284,22 @@ def empresas():
         for x in rows:x['diagnosticado']=x.get('cnpj') in diag_cnpjs
         # Situação comercial FS, independente do diagnóstico Sebrae.
         try:
-            pm={x.get('cnpj'):x for x in _fetch_paginated(PROSP_TABLE,{'select':'cnpj,status,ultimo_contato,proximo_contato'},timeout=20)}
+            pm={x.get('cnpj'):x for x in _fetch_paginated(PROSP_TABLE,{'select':'cnpj,status,interesse,ultimo_contato,envios_count,ultimo_canal'},timeout=20)}
         except Exception: pm={}
+        try:
+            am={x.get('cnpj'):x for x in _fetch_paginated(ATEND_CONTABIL_TABLE,{'select':'cnpj,status,data,observacao'},timeout=20)}
+        except Exception: am={}
         for x in rows:
             px=pm.get(x.get('cnpj'),{})
             x['prospeccao_status']=px.get('status') or 'nao_abordado'
+            x['prospeccao_interesse']=px.get('interesse') or ''
             x['prospeccao_ultimo_contato']=px.get('ultimo_contato')
-            x['prospeccao_proximo_contato']=px.get('proximo_contato')
+            x['prospeccao_envios_count']=int(px.get('envios_count') or 0)
+            x['prospeccao_ultimo_canal']=px.get('ultimo_canal') or ''
+            ax=am.get(x.get('cnpj'),{})
+            x['atendimento_contabil_status']=ax.get('status') or 'nao_iniciado'
+            x['atendimento_contabil_data']=ax.get('data')
+            x['atendimento_contabil_observacao']=ax.get('observacao') or ''
         return jsonify(rows)
     except Exception as e:return jsonify({'erro':str(e)}),500
 
@@ -428,19 +438,40 @@ def prospeccao(cnpj):
         if not r.ok:return jsonify({'erro':r.text}),500
         d=r.json(); return jsonify(d[0] if d else {'cnpj':c,'status':'nao_abordado'})
     b=request.json or {}
-    allowed=['status','interesse','ultimo_contato','proximo_contato']
+    allowed=['status','interesse','ultimo_contato','proximo_contato','envios_count','ultimo_canal']
     payload={'cnpj':c,**{k:b.get(k) for k in allowed if k in b}}
     r=requests.post(url(PROSP_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify(r.json()[0] if r.json() else payload)
 
-@app.route('/api/prospeccao/marcar-envio/<path:cnpj>',methods=['POST'])
-def marcar_envio(cnpj):
-    c=fmt(cnpj); now=datetime.now(timezone.utc).isoformat()
-    payload={'cnpj':c,'status':'apresentacao_enviada','ultimo_contato':now}
-    r=requests.post(url(PROSP_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
+@app.route('/api/prospeccao/enviar/<path:cnpj>',methods=['POST'])
+def registrar_envio_prospeccao(cnpj):
+    c=fmt(cnpj); b=request.json or {}; canal=(b.get('canal') or '').strip().lower()
+    if canal not in ('whatsapp','sms'): return jsonify({'erro':'Canal inválido.'}),400
+    try:
+        r=requests.get(url(PROSP_TABLE),headers=sb_headers(),params={'cnpj':f'eq.{c}','select':'envios_count','limit':'1'},timeout=20)
+        if not r.ok:return jsonify({'erro':r.text}),500
+        d=r.json(); atual=int((d[0].get('envios_count') if d else 0) or 0)
+        now=datetime.now(timezone.utc).isoformat(); payload={'cnpj':c,'status':'contato_realizado','interesse':b.get('interesse') or '','ultimo_contato':now,'envios_count':atual+1,'ultimo_canal':canal,'atualizado_em':now}
+        r=requests.post(url(PROSP_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
+        if not r.ok:return jsonify({'erro':r.text}),500
+        return jsonify({'ok':True,'status':'contato_realizado','ultimo_contato':now,'envios_count':atual+1,'ultimo_canal':canal})
+    except Exception as e:return jsonify({'erro':str(e)}),500
+
+@app.route('/api/atendimento-contabil/<path:cnpj>',methods=['GET','PUT'])
+def atendimento_contabil(cnpj):
+    c=fmt(cnpj)
+    if request.method=='GET':
+        r=requests.get(url(ATEND_CONTABIL_TABLE),headers=sb_headers(),params={'cnpj':f'eq.{c}','select':'*','limit':'1'},timeout=20)
+        if not r.ok:return jsonify({'erro':r.text}),500
+        d=r.json(); return jsonify(d[0] if d else {'cnpj':c,'status':'nao_iniciado'})
+    b=request.json or {}; allowed_status={'nao_iniciado','agendado','em_atendimento','proposta_enviada','fidelizado','retorno','nao_convertido'}
+    status=(b.get('status') or 'nao_iniciado').strip()
+    if status not in allowed_status:return jsonify({'erro':'Status inválido.'}),400
+    payload={'cnpj':c,'status':status,'data':b.get('data') or None,'observacao':b.get('observacao') or '','atualizado_em':datetime.now(timezone.utc).isoformat()}
+    r=requests.post(url(ATEND_CONTABIL_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
     if not r.ok:return jsonify({'erro':r.text}),500
-    return jsonify({'ok':True,'ultimo_contato':now})
+    return jsonify(r.json()[0] if r.json() else payload)
 
 @app.route('/api/portfolio/catalogo')
 def portfolio_catalogo():
