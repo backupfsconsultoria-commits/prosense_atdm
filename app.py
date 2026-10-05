@@ -203,6 +203,24 @@ def _nominatim(q):
     except Exception: pass
     return None,None
 
+def _nominatim_reverse(lat, lon):
+    ok,lat,lon=_valid_coord(lat,lon)
+    if not ok:return None
+    try:
+        r=requests.get('https://nominatim.openstreetmap.org/reverse', params={
+            'lat':lat,'lon':lon,'format':'jsonv2','addressdetails':1,'zoom':18
+        }, headers={'User-Agent':'prosense_atdm/1.2 (field-service reverse-geocoder)'}, timeout=20)
+        if not r.ok:return None
+        j=r.json() or {}; a=j.get('address') or {}
+        log=(a.get('road') or a.get('pedestrian') or a.get('residential') or a.get('footway') or a.get('path') or '')
+        bairro=(a.get('suburb') or a.get('neighbourhood') or a.get('quarter') or a.get('city_district') or '')
+        municipio=(a.get('city') or a.get('town') or a.get('municipality') or a.get('village') or '')
+        uf=''
+        iso=a.get('ISO3166-2-lvl4') or a.get('ISO3166-2-lvl6') or ''
+        if isinstance(iso,str) and iso.startswith('BR-') and len(iso)>=5:uf=iso.split('-',1)[1][:2]
+        return {'logradouro':log,'numero':a.get('house_number') or '','bairro':bairro,'cep':digits(a.get('postcode')),'municipio':municipio,'uf':uf,'display_name':j.get('display_name') or ''}
+    except Exception:return None
+
 def geocode_empresa(e):
     ok,lat,lon=_valid_coord(e.get('latitude'),e.get('longitude'))
     if ok:return lat,lon,'cache'
@@ -303,6 +321,41 @@ def empresas():
         return jsonify(rows)
     except Exception as e:return jsonify({'erro':str(e)}),500
 
+@app.route('/api/cnpj/consultar/<path:cnpj>')
+def consultar_cnpj_unitario(cnpj):
+    c=digits(cnpj)
+    if len(c)!=14:return jsonify({'erro':'Informe um CNPJ válido com 14 dígitos.'}),400
+    try:
+        d=fetch_cnpj(c)
+        existente=get_one(c)
+        return jsonify({'ok':True,'empresa':d,'ja_cadastrada':bool(existente)})
+    except Exception as e:
+        return jsonify({'erro':str(e)}),502
+
+@app.route('/api/importar-unitario',methods=['POST'])
+def importar_unitario():
+    b=request.json or {}; c=digits(b.get('cnpj')); lista_id=b.get('lista_id')
+    if len(c)!=14:return jsonify({'erro':'Informe um CNPJ válido com 14 dígitos.'}),400
+    try: lista_id=int(lista_id)
+    except Exception:return jsonify({'erro':'Selecione a lista de destino.'}),400
+    try:
+        lr=requests.get(url(LIST_TABLE),headers=sb_headers(),params={'id':f'eq.{lista_id}','select':'id,nome','limit':'1'},timeout=20)
+        lr.raise_for_status(); ld=lr.json()
+        if not ld:return jsonify({'erro':'Lista de destino não encontrada.'}),404
+        d=fetch_cnpj(c)
+        origem='endereco_cadastral'
+        if b.get('usar_localizacao_atual'):
+            try: lat=float(b.get('latitude')); lon=float(b.get('longitude'))
+            except Exception:return jsonify({'erro':'Não foi possível ler a localização atual.'}),400
+            ok,lat,lon=_valid_coord(lat,lon)
+            if not ok:return jsonify({'erro':'A localização capturada está fora da área válida.'}),400
+            d['latitude']=lat; d['longitude']=lon; origem='localizacao_atual'
+        upsert_empresa(d); link_empresa(lista_id,d['cnpj'])
+        salvo=get_one(d['cnpj']) or d
+        return jsonify({'ok':True,'empresa':salvo,'lista':ld[0],'origem_localizacao':origem})
+    except Exception as e:
+        return jsonify({'erro':str(e)}),500
+
 @app.route('/api/importar',methods=['POST'])
 def importar():
     body=request.json or {}; raw=body.get('cnpjs',''); nome=body.get('nome_lista',''); vals=[]
@@ -333,20 +386,35 @@ def importar_planilha():
     except ValueError as e:return jsonify({'erro':str(e)}),400
     except Exception as e:return jsonify({'erro':str(e)}),500
 
+@app.route('/api/geolocalizacao/reverso',methods=['POST'])
+def geolocalizacao_reverso():
+    data=request.json or {}
+    ok,lat,lon=_valid_coord(data.get('latitude'),data.get('longitude'))
+    if not ok:return jsonify({'erro':'Coordenadas inválidas ou fora da área esperada.'}),400
+    endereco=_nominatim_reverse(lat,lon)
+    if endereco is None:return jsonify({'erro':'A localização foi obtida, mas não foi possível identificar o endereço agora.'}),502
+    return jsonify({'ok':True,'latitude':lat,'longitude':lon,'endereco':endereco})
+
 @app.route('/api/empresa/<path:cnpj>',methods=['PUT'])
 def editar(cnpj):
-    data=request.json or {};allowed=['razao_social','nome_fantasia','situacao','cnae','logradouro','numero','complemento','bairro','cep','municipio','uf','telefone','email','status_visita','dia_mes_sse','observacoes']
+    data=request.json or {};allowed=['razao_social','nome_fantasia','situacao','cnae','logradouro','numero','complemento','bairro','cep','municipio','uf','telefone','email','status_visita','dia_mes_sse','observacoes','latitude','longitude']
     patch={k:data[k] for k in allowed if k in data};status=patch.get('status_visita');now=datetime.now(timezone.utc).isoformat()
+    old=get_one(cnpj)
+    if not old:return jsonify({'erro':'CNPJ não encontrado'}),404
     if status is not None:
         try:status=int(status);patch['status_visita']=status
         except:return jsonify({'erro':'status_visita inválido'}),400
-        old=get_one(cnpj)
-        if not old:return jsonify({'erro':'CNPJ não encontrado'}),404
         if status==1 and not old.get('primeira_visita_em'):patch['primeira_visita_em']=now
         if status==2:
             if not old.get('primeira_visita_em'):patch['primeira_visita_em']=now
             if not old.get('segunda_visita_em'):patch['segunda_visita_em']=now
-        if any(k in patch for k in ['logradouro','numero','bairro','cep','municipio','uf']):patch.update({'latitude':None,'longitude':None})
+    tem_coords=('latitude' in patch and 'longitude' in patch)
+    if tem_coords:
+        ok,lat,lon=_valid_coord(patch.get('latitude'),patch.get('longitude'))
+        if not ok:return jsonify({'erro':'Latitude/longitude inválidas'}),400
+        patch['latitude']=lat;patch['longitude']=lon
+    elif any(k in patch for k in ['logradouro','numero','bairro','cep','municipio','uf']):
+        patch.update({'latitude':None,'longitude':None})
     r=requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f'eq.{fmt(cnpj)}'},json=patch,timeout=25)
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify({'ok':True})
