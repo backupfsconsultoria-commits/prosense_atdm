@@ -450,7 +450,10 @@ def registrar_envio_prospeccao(cnpj):
     if canal not in ('whatsapp','sms'): return jsonify({'erro':'Canal inválido.'}),400
     try:
         r=requests.get(url(PROSP_TABLE),headers=sb_headers(),params={'cnpj':f'eq.{c}','select':'envios_count','limit':'1'},timeout=20)
-        if not r.ok:return jsonify({'erro':r.text}),500
+        if not r.ok:
+            if 'envios_count' in r.text and ('does not exist' in r.text or '42703' in r.text):
+                return jsonify({'erro':'Banco ainda sem a coluna envios_count. Execute migracao_v44.sql no Supabase e tente novamente.'}),500
+            return jsonify({'erro':r.text}),500
         d=r.json(); atual=int((d[0].get('envios_count') if d else 0) or 0)
         now=datetime.now(timezone.utc).isoformat(); payload={'cnpj':c,'status':'contato_realizado','interesse':b.get('interesse') or '','ultimo_contato':now,'envios_count':atual+1,'ultimo_canal':canal,'atualizado_em':now}
         r=requests.post(url(PROSP_TABLE),headers=sb_headers('resolution=merge-duplicates,return=representation'),params={'on_conflict':'cnpj'},json=payload,timeout=20)
