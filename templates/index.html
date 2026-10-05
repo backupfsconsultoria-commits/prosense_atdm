@@ -291,8 +291,8 @@ async function carregarMensagemProspPersistida(forcar=false){
      if(r.ok&&String(j.mensagem_padrao||'').trim()){
        let m=String(j.mensagem_padrao).trim();
        let repeticoes=(m.match(/Sua empresa em dia/gi)||[]).length;
-       let invalida=m.includes('{{LINK_TRIAGEM}}')||m.includes('{{SLOGAN}}')||repeticoes>3;
-       prospMensagemAtual=invalida?PROSP_MSG:m;
+       // A mensagem é texto literal salvo pelo usuário. Não há mais marcadores/template.
+       prospMensagemAtual=repeticoes>3?PROSP_MSG:m;
      }
    }catch(e){console.warn('Não foi possível carregar a mensagem padrão de prospecção.',e)}
    prospMensagemCarregada=true;
@@ -315,7 +315,6 @@ function fecharEditarMensagemProsp(){msgEditBack.classList.remove('open')}
 async function salvarMensagemProspPopup(){
  let t=String(p_mensagem_edit.value||'').trim();
  if(!t){alert('A mensagem não pode ficar vazia.');return}
- if(t.includes('{{LINK_TRIAGEM}}')||t.includes('{{SLOGAN}}')){alert('Use o link e o slogan diretamente no texto. Os marcadores antigos {{LINK_TRIAGEM}} e {{SLOGAN}} não são mais usados.');return}
  let btn=document.getElementById('btnSalvarMensagemProsp'),rotulo=btn?.textContent;
  if(btn){btn.disabled=true;btn.textContent='Salvando...'}
  try{
