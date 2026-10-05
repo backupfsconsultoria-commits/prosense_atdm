@@ -23,9 +23,9 @@
 <div class="field"><label>UF</label><input id="m_uf"></div><div class="field"><label>Telefone</label><input id="m_telefone"></div>
 <div class="field span2"><label>E-mail</label><input id="m_email"></div><div class="field span2"><label>Foto da fachada</label><div class="photo-box"><button type="button" id="m_photo_btn" class="ghost" onclick="selecionarFoto()">📷 Inserir foto</button><span id="m_photo_status" class="statushint">Sem foto</span></div><input id="m_photo_file" type="file" accept="image/*" style="display:none" onchange="enviarFotoSelecionada(this)"></div><div class="field span2"><label>Observações</label><textarea id="m_observacoes" placeholder="Inclua aqui observações do atendimento..."></textarea></div>
 </div><div class="modalactions"><div><button class="danger" onclick="excluirAtual()">Excluir registro</button> <button class="diagbtn" onclick="abrirDiagnostico(atual?.cnpj)">🩺 Diagnóstico</button> <button class="ghost" onclick="abrirProspeccaoDaEdicao()">🤝 Prospecção FS</button></div><div><button class="ghost" onclick="fecharModal()">Cancelar</button> <button class="primary" onclick="salvarModal()">Salvar edição</button></div></div></div></div></div>
-<div id="prospBack" class="modalback" onclick="if(event.target===this)fecharProspeccao()"><div class="modal" style="max-width:820px"><div class="modalhead"><h2>🤝 Prospecção FS</h2><button class="close" onclick="fecharProspeccao()">×</button></div><div class="modalbody"><div id="prospEmpresa" style="font-weight:800;margin-bottom:12px"></div><div class="grid"><div class="field span2"><label>WhatsApp da empresa</label><div style="display:flex;gap:8px"><input id="p_whatsapp" class="fixed" readonly placeholder="Sem WhatsApp cadastrado"><button class="ghost" type="button" onclick="abrirEditarWhatsApp()" title="Editar WhatsApp" style="white-space:nowrap">✏️</button></div></div><div class="field span2"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><label style="margin:0">Mensagem que será enviada</label><button class="ghost" type="button" onclick="abrirEditarMensagemProsp()" title="Editar mensagem" style="padding:6px 10px;white-space:nowrap">✏️ Editar mensagem</button></div><textarea id="p_mensagem" class="fixed" readonly style="min-height:235px;white-space:pre-wrap;margin-top:6px"></textarea></div><div class="field"><label>Status comercial</label><select id="p_status"><option value="nao_abordado">Não abordado</option><option value="contato_realizado">Contato realizado</option><option value="apresentacao_enviada">Apresentação enviada</option><option value="interessado">Interessado</option><option value="triagem_enviada">Triagem enviada</option><option value="negociacao">Em negociação</option><option value="cliente">Cliente</option><option value="sem_interesse">Sem interesse</option></select></div><div class="field"><label>Interesse identificado</label><select id="p_interesse"><option value="">Ainda não definido</option><option>Contabilidade geral</option><option>Regularização tributária</option><option>Débitos e parcelamentos</option><option>Abertura ou baixa</option><option>Departamento pessoal</option><option>Certidões</option><option>Outro</option></select></div><div class="field"><label>Último contato</label><input id="p_ultimo" class="fixed" readonly></div><div class="field"><label>Próximo contato</label><input id="p_proximo" type="date"></div></div><div class="modalactions" style="justify-content:flex-end"><button class="ghost" onclick="salvarProspeccao(false)">Salvar</button><a id="p_enviar_sms" class="ghost btn" target="_self" rel="noopener" onclick="if(!this.getAttribute('href')){alert('Telefone vazio ou incompleto. Corrija o número no lápis.');return false}">✉️ Enviar por SMS</a><a id="p_enviar_whatsapp" class="primary btn" target="_self" rel="noopener" onclick="if(!this.getAttribute('href')){alert('WhatsApp vazio ou incompleto. Corrija o número no lápis.');return false}">💬 Enviar para WhatsApp</a></div><small style="color:#667085">WhatsApp e SMS apenas abrem o aplicativo com a mensagem pronta; não alteram o status comercial. O status só muda quando você clicar em Salvar. SMS longos podem ser divididos em várias mensagens pela operadora.</small></div></div></div>
+<div id="prospBack" class="modalback" onclick="if(event.target===this)fecharProspeccao()"><div class="modal" style="max-width:820px"><div class="modalhead"><h2>🤝 Prospecção FS</h2><button class="close" onclick="fecharProspeccao()">×</button></div><div class="modalbody"><div id="prospEmpresa" style="font-weight:800;margin-bottom:12px"></div><div class="grid"><div class="field span2"><label>WhatsApp da empresa</label><div style="display:flex;gap:8px"><input id="p_whatsapp" class="fixed" readonly placeholder="Sem WhatsApp cadastrado"><button class="ghost" type="button" onclick="abrirEditarWhatsApp()" title="Editar WhatsApp" style="white-space:nowrap">✏️</button></div></div><div class="field span2"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><label style="margin:0">Mensagem que será enviada</label><button class="ghost" type="button" onclick="abrirEditarMensagemProsp()" title="Editar mensagem" style="padding:6px 10px;white-space:nowrap">✏️ Editar mensagem</button></div><textarea id="p_mensagem" class="fixed" readonly style="min-height:235px;white-space:pre-wrap;margin-top:6px"></textarea></div><div class="field"><label>Status comercial</label><select id="p_status"><option value="nao_abordado">Não abordado</option><option value="contato_realizado">Contato realizado</option><option value="apresentacao_enviada">Apresentação enviada</option><option value="interessado">Interessado</option><option value="triagem_enviada">Triagem enviada</option><option value="negociacao">Em negociação</option><option value="cliente">Cliente</option><option value="sem_interesse">Sem interesse</option></select></div><div class="field"><label>Interesse identificado</label><select id="p_interesse"><option value="">Ainda não definido</option><option>Contabilidade geral</option><option>Regularização tributária</option><option>Débitos e parcelamentos</option><option>Abertura ou baixa</option><option>Departamento pessoal</option><option>Certidões</option><option>Outro</option></select></div><div class="field"><label>Último contato</label><input id="p_ultimo" class="fixed" readonly></div><div class="field"><label>Data</label><input id="p_proximo" type="date"></div></div><div class="modalactions" style="justify-content:flex-end"><button class="ghost" onclick="salvarProspeccao(false)">Salvar</button><a id="p_enviar_sms" class="ghost btn" target="_self" rel="noopener" onclick="if(!this.getAttribute('href')){alert('Telefone vazio ou incompleto. Corrija o número no lápis.');return false}">✉️ Enviar por SMS</a><a id="p_enviar_whatsapp" class="primary btn" target="_self" rel="noopener" onclick="if(!this.getAttribute('href')){alert('WhatsApp vazio ou incompleto. Corrija o número no lápis.');return false}">💬 Enviar para WhatsApp</a></div><small style="color:#667085">WhatsApp e SMS apenas abrem o aplicativo com a mensagem pronta; não alteram o status comercial. O status só muda quando você clicar em Salvar. SMS longos podem ser divididos em várias mensagens pela operadora.</small></div></div></div>
 <div id="whatsEditBack" class="modalback" onclick="if(event.target===this)fecharEditarWhatsApp()" style="z-index:10050"><div class="modal" style="max-width:460px"><div class="modalhead"><h2>✏️ Editar WhatsApp</h2><button class="close" onclick="fecharEditarWhatsApp()">×</button></div><div class="modalbody"><div class="field"><label>WhatsApp da empresa</label><input id="p_whatsapp_edit" inputmode="tel" placeholder="(86) 99999-9999"></div><div class="actions"><button class="primary" onclick="salvarWhatsAppPopup()">Salvar número</button><button class="ghost" onclick="fecharEditarWhatsApp()">Cancelar</button></div></div></div></div>
-<div id="msgEditBack" class="modalback" onclick="if(event.target===this)fecharEditarMensagemProsp()" style="z-index:10060"><div class="modal" style="max-width:720px"><div class="modalhead"><h2>✏️ Editar mensagem de prospecção</h2><button class="close" onclick="fecharEditarMensagemProsp()">×</button></div><div class="modalbody"><div class="field"><label>Texto que será enviado</label><textarea id="p_mensagem_edit" style="min-height:330px;white-space:pre-wrap"></textarea></div><small style="color:#667085">A alteração vale apenas para esta abertura da prospecção. Ao abrir outra empresa, o texto padrão volta automaticamente.</small><div class="actions"><button class="primary" type="button" onclick="salvarMensagemProspPopup()">Usar esta mensagem</button><button class="ghost" type="button" onclick="restaurarMensagemProspPadrao()">Restaurar padrão</button><button class="ghost" type="button" onclick="fecharEditarMensagemProsp()">Cancelar</button></div></div></div></div>
+<div id="msgEditBack" class="modalback" onclick="if(event.target===this)fecharEditarMensagemProsp()" style="z-index:10060"><div class="modal" style="max-width:720px"><div class="modalhead"><h2>✏️ Editar mensagem de prospecção</h2><button class="close" onclick="fecharEditarMensagemProsp()">×</button></div><div class="modalbody"><div class="field"><label>Texto padrão dos próximos envios</label><textarea id="p_mensagem_edit" style="min-height:330px;white-space:pre-wrap"></textarea></div><small style="color:#667085">Ao salvar, esta mensagem fica gravada e será usada automaticamente nos próximos envios para todas as empresas, até você editá-la novamente.</small><div class="actions"><button id="btnSalvarMensagemProsp" class="primary" type="button" onclick="salvarMensagemProspPopup()">Salvar mensagem padrão</button><button class="ghost" type="button" onclick="restaurarMensagemProspPadrao()">Restaurar texto original</button><button class="ghost" type="button" onclick="fecharEditarMensagemProsp()">Cancelar</button></div></div></div></div>
 <div id="photoback" class="modalback" onclick="if(event.target===this)fecharFoto()"><div class="modal" style="width:auto;max-width:820px"><div class="modalhead"><h2 id="photoTitle">Fachada</h2><button class="close" onclick="fecharFoto()">×</button></div><div class="modalbody"><img id="photoPreview" class="photo-preview" alt="Foto da fachada"></div></div></div>
 <div id="portfolioBack" class="modalback" onclick="if(event.target===this)fecharPortfolio()"><div class="modal" style="max-width:860px"><div class="modalhead"><h2>Soluções do portfólio Sebrae</h2><button class="close" onclick="fecharPortfolio()">×</button></div><div class="modalbody"><div class="grid"><div class="field"><label>Área</label><div class="catline"><select id="solArea"></select><button class="ghost mini-pencil" onclick="abrirCategorias('area')">✎</button></div></div><div class="field"><label>Tipo</label><div class="catline"><select id="solTipo"></select><button class="ghost mini-pencil" onclick="abrirCategorias('tipo')">✎</button></div></div><div class="field span2"><label>Nome da solução</label><input id="solNome" placeholder="Ex.: CURSO ONLINE QUALIDADE NO ATENDIMENTO AO CLIENTE" oninput="this.value=this.value.toUpperCase()"></div><div class="field span2"><label>Link</label><input id="solLink" placeholder="https://..."></div></div><div class="actions"><button class="primary" onclick="salvarSolucao()">Salvar solução</button></div><hr style="border:0;border-top:1px solid #e4e7ec;margin:18px 0"><div class="topcontrols" style="display:flex;gap:8px;flex-wrap:wrap"><select id="pfArea" onchange="renderPortfolio()"></select><select id="pfTipo" onchange="renderPortfolio()"></select></div><div id="portfolioLista" style="margin-top:10px"></div></div></div></div>
 <div id="catBack" class="modalback" onclick="if(event.target===this)fecharCategorias()"><div class="modal" style="max-width:470px"><div class="modalhead"><h2 id="catTitle">Editar categorias</h2><button class="close" onclick="fecharCategorias()">×</button></div><div class="modalbody"><div class="catline"><input id="catNome" style="flex:1;padding:9px;border:1px solid #d0d5dd;border-radius:8px" placeholder="Descrição"><button class="primary" onclick="salvarCategoria()">Salvar</button></div><div id="catLista"></div></div></div></div>
@@ -279,15 +279,54 @@ ${PROSP_LINK_TRIAGEM}
 
 *FS Consultoria e Assessoria Contábil*
 Sua empresa em dia, com orientação contábil de verdade.`;
-function montarMensagemFS(){return PROSP_MSG}
+let prospMensagemAtual=PROSP_MSG,prospMensagemCarregada=false,prospMensagemPromise=null;
+async function carregarMensagemProspPersistida(forcar=false){
+ if(prospMensagemCarregada&&!forcar)return prospMensagemAtual;
+ if(prospMensagemPromise&&!forcar)return prospMensagemPromise;
+ prospMensagemPromise=(async()=>{
+   try{
+     let r=await fetch('/api/fs/config');
+     let j=await r.json().catch(()=>({}));
+     if(r.ok&&String(j.mensagem_padrao||'').trim()){
+       let m=String(j.mensagem_padrao).trim();
+       m=m.replaceAll('{{LINK_TRIAGEM}}',String(j.link_triagem||PROSP_LINK_TRIAGEM));
+       m=m.replaceAll('{{SLOGAN}}',String(j.slogan||'Sua empresa em dia, com orientação contábil de verdade.'));
+       prospMensagemAtual=m;
+     }
+   }catch(e){console.warn('Não foi possível carregar a mensagem padrão de prospecção.',e)}
+   prospMensagemCarregada=true;
+   return prospMensagemAtual;
+ })().finally(()=>{prospMensagemPromise=null});
+ return prospMensagemPromise;
+}
+function montarMensagemFS(){return prospMensagemAtual||PROSP_MSG}
 function abrirProspeccaoLista(cnpj,ev){if(ev){ev.preventDefault();ev.stopPropagation()}abrirProspeccao(cnpj)}
 function abrirProspeccaoDaEdicao(){let c=atual?.cnpj;if(!c)return;fecharModal();setTimeout(()=>abrirProspeccao(c),0)}
 function abrirEditarWhatsApp(){if(!prospEmpresaAtual)return;p_whatsapp_edit.value=p_whatsapp.value||'';whatsEditBack.classList.add('open');setTimeout(()=>p_whatsapp_edit.focus(),50)}
 function fecharEditarWhatsApp(){whatsEditBack.classList.remove('open')}
-function abrirEditarMensagemProsp(){if(!prospEmpresaAtual)return;p_mensagem_edit.value=p_mensagem.value||PROSP_MSG;msgEditBack.classList.add('open');setTimeout(()=>p_mensagem_edit.focus(),50)}
+async function abrirEditarMensagemProsp(){
+ if(!prospEmpresaAtual)return;
+ let t=await carregarMensagemProspPersistida();
+ p_mensagem_edit.value=t||PROSP_MSG;
+ msgEditBack.classList.add('open');setTimeout(()=>p_mensagem_edit.focus(),50)
+}
 function fecharEditarMensagemProsp(){msgEditBack.classList.remove('open')}
-function salvarMensagemProspPopup(){let t=String(p_mensagem_edit.value||'').trim();if(!t){alert('A mensagem não pode ficar vazia.');return}p_mensagem.value=t;fecharEditarMensagemProsp();atualizarLinksContatoProsp()}
-function restaurarMensagemProspPadrao(){p_mensagem_edit.value=PROSP_MSG;p_mensagem.value=PROSP_MSG;atualizarLinksContatoProsp()}
+async function salvarMensagemProspPopup(){
+ let t=String(p_mensagem_edit.value||'').trim();
+ if(!t){alert('A mensagem não pode ficar vazia.');return}
+ let btn=document.getElementById('btnSalvarMensagemProsp'),rotulo=btn?.textContent;
+ if(btn){btn.disabled=true;btn.textContent='Salvando...'}
+ try{
+   let r=await fetch('/api/fs/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({mensagem_padrao:t})});
+   let j=await r.json().catch(()=>({}));
+   if(!r.ok)throw new Error(j.erro||'Erro ao salvar a mensagem padrão.');
+   prospMensagemAtual=t;prospMensagemCarregada=true;
+   p_mensagem.value=t;atualizarLinksContatoProsp();fecharEditarMensagemProsp();
+   alert('Mensagem padrão salva com sucesso. Ela será usada nos próximos envios até você editá-la novamente.');
+ }catch(e){alert(e.message||'Erro ao salvar a mensagem padrão.')}
+ finally{if(btn){btn.disabled=false;btn.textContent=rotulo||'Salvar mensagem padrão'}}
+}
+function restaurarMensagemProspPadrao(){p_mensagem_edit.value=PROSP_MSG}
 async function salvarWhatsAppPopup(){
  if(!prospEmpresaAtual)return false;
  let numero=p_whatsapp_edit.value.trim();
@@ -297,6 +336,11 @@ async function salvarWhatsAppPopup(){
  let e=dados.find(x=>x.cnpj===prospEmpresaAtual.cnpj);if(e)e.telefone=numero;
  fecharEditarWhatsApp();atualizarLinksContatoProsp();return true
 }
+function hojeLocalISO(){
+ const d=new Date(),y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dia=String(d.getDate()).padStart(2,'0');
+ return `${y}-${m}-${dia}`
+}
+function statusPadraoProsp(v){return (!v||v==='nao_abordado')?'triagem_enviada':v}
 async function abrirProspeccao(cnpj){
  cnpj=safeDecode(cnpj||'');
  if(!cnpj)return;
@@ -305,10 +349,13 @@ async function abrirProspeccao(cnpj){
  prospEmpresa.textContent=(e.nome_fantasia||e.razao_social||'Empresa')+' — '+e.cnpj;
  p_whatsapp.value=e.telefone||'';
  p_mensagem.value=montarMensagemFS();
- p_status.value=e.prospeccao_status||'nao_abordado';
+ carregarMensagemProspPersistida().then(msg=>{
+   if(prospEmpresaAtual&&prospEmpresaAtual.cnpj===e.cnpj){p_mensagem.value=msg||PROSP_MSG;atualizarLinksContatoProsp()}
+ });
+ p_status.value=statusPadraoProsp(e.prospeccao_status);
  p_interesse.value='';
  p_ultimo.value=fmtDataContato(e.prospeccao_ultimo_contato);
- p_proximo.value=e.prospeccao_proximo_contato||'';
+ p_proximo.value=hojeLocalISO();
  atualizarLinksContatoProsp();
  prospBack.classList.add('open');document.body.style.overflow='hidden';
  try{
@@ -316,7 +363,7 @@ async function abrirProspeccao(cnpj){
    let j=await r.json();
    if(!r.ok)throw new Error(j.erro||'Erro ao carregar prospecção');
    if(!prospEmpresaAtual||prospEmpresaAtual.cnpj!==e.cnpj)return;
-   p_status.value=j.status||'nao_abordado';p_interesse.value=j.interesse||'';p_ultimo.value=fmtDataContato(j.ultimo_contato);p_proximo.value=j.proximo_contato||'';
+   p_status.value=statusPadraoProsp(j.status);p_interesse.value=j.interesse||'';p_ultimo.value=fmtDataContato(j.ultimo_contato);p_proximo.value=hojeLocalISO();
    e.prospeccao_status=j.status||'nao_abordado';e.prospeccao_ultimo_contato=j.ultimo_contato||null;e.prospeccao_proximo_contato=j.proximo_contato||null;
  }catch(err){console.warn('Prospecção: falha ao carregar dados comerciais',err)}
  atualizarLinksContatoProsp();
@@ -332,7 +379,7 @@ async function salvarProspeccao(fechar=true){
  if(!r.ok){alert(j.erro||'Erro ao salvar prospecção');return false}
  if(e){e.prospeccao_status=b.status;e.prospeccao_proximo_contato=b.proximo_contato;if(b.ultimo_contato)e.prospeccao_ultimo_contato=b.ultimo_contato}
  if(b.ultimo_contato)p_ultimo.value=fmtDataContato(b.ultimo_contato);
- render();if(fechar)fecharProspeccao();return true
+ render();alert('Dados de prospecção salvos com sucesso.');if(fechar)fecharProspeccao();return true
 }
 function prepararContatoProsp(){
  if(!prospEmpresaAtual)return null;
