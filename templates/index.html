@@ -91,14 +91,34 @@ async function importarPlanilha(){
  if(!n){plan_msg.textContent='Informe o nome da lista.';return}
  if(!f){plan_msg.textContent='Selecione a planilha.';return}
  let fd=new FormData();fd.append('nome_lista',n);fd.append('arquivo',f);
- btnImportPlan.disabled=true;plan_msg.textContent='Importando e salvando no Supabase...';
+ btnImportPlan.disabled=true;btnImportPlan.textContent='Importando...';
+ plan_msg.textContent='Importando e salvando no Supabase...';
  try{
-   let res=await fetch('/api/importar-planilha',{method:'POST',body:fd}),r=await res.json();
-   if(!res.ok)throw new Error(r.erro||'Falha na importação');
-   plan_msg.innerHTML=`✅ <b>${r.salvas}</b> empresas salvas/atualizadas. Ignoradas: <b>${r.ignoradas}</b>.`;
-   await carregarListas();
+   let res=await fetch('/api/importar-planilha',{method:'POST',body:fd});
+   let r=await res.json();
+   if(!res.ok || !r.ok)throw new Error(r.erro||'Falha na importação');
+   const total=Number(r.salvas||0),ignoradas=Number(r.ignoradas||0);
+   plan_msg.textContent=`✅ Importação concluída! ${total} empresas salvas/atualizadas. Ignoradas: ${ignoradas}. Abrindo lista...`;
+   // O servidor já confirmou o salvamento: atualização da interface não deve ser tratada como erro de importação.
+   await new Promise(resolve=>setTimeout(resolve,1500));
+   fecharImportarPlanilha();
+   plan_arquivo.value='';
+   try{
+     await carregarListas();
+     let destino=listas.find(x=>String(x.id)===String(r.lista?.id));
+     if(!destino)destino=listas.find(x=>String(x.nome||'').trim().toLowerCase()===n.toLowerCase());
+     if(destino){
+       await abrirLista(destino.id);
+     }else{
+       voltarListas();
+       alert(`Importação concluída! ${total} empresas salvas/atualizadas. Confira sua lista na tela inicial.`);
+     }
+   }catch(err){
+     console.error('Falha ao atualizar a tela depois da importação:',err);
+     alert(`Importação concluída! ${total} empresas salvas/atualizadas, mas a atualização da tela falhou. Clique em Atualizar para conferir.`);
+   }
  }catch(e){plan_msg.textContent='Erro: '+e.message}
- finally{btnImportPlan.disabled=false}
+ finally{btnImportPlan.disabled=false;btnImportPlan.textContent='📥 Importar e salvar'}
 }
 
 function exportarAtual(){location.href='/exportar.csv'+(listaAtual?'?lista_id='+listaAtual.id:'')}
