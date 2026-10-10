@@ -294,7 +294,7 @@ def _evidencia_local(item, e, quadra, casa, setor):
     rua_ret=_norm_lugar(a.get('road') or a.get('pedestrian') or a.get('residential') or a.get('street') or '')
     rua_ok=bool(rua and rua_ret and len(rua)>3 and (rua in rua_ret or rua_ret in rua))
     numero=_norm_lugar(e.get('numero')); num_ret=_norm_lugar(a.get('house_number'))
-    if rua_ok and numero and numero==num_ret:return 100,'rua e número conferidos'
+    if rua_ok and numero and numero==num_ret and bairro_ok:return 100,'rua e número conferidos'
     if rua_ok and bairro_ok and not numero:
         return 75,'rua confirmada (sem número cadastrado)'
     # Rua sem o número pedido não equivale ao imóvel; tentar quadra ou setor.
@@ -369,6 +369,18 @@ IMPORTAR_PLANILHA_HTML = '<!doctype html><html lang="pt-br"><head><meta charset=
 
 @app.route('/')
 def home(): return render_template('index.html')
+
+
+# Google Maps comparison mode: no automatic writes to Supabase and no mass calls.
+# Only the 20 CNPJs explicitly chosen by the user are tested.
+@app.route('/mapa-google')
+def mapa_google():
+    key=os.getenv('GOOGLE_MAPS_BROWSER_KEY','').strip()
+    if not key:
+        return render_template('mapa_google.html',google_key='',cnpjs='',configured=False)
+    requested=[fmt(x) for x in (request.args.get('cnpjs') or '').split(',') if len(digits(x))==14]
+    return render_template('mapa_google.html',google_key=key,cnpjs=','.join(dict.fromkeys(requested[:20])),configured=True)
+
 @app.route('/health')
 def health(): return jsonify({'ok':True,'database':'supabase','configured':bool(SUPABASE_URL and SUPABASE_KEY),'table':TABLE})
 
