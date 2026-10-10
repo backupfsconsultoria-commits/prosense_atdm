@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ProSense — Comparação Google Maps</title>
+<style>
+:root{font-family:system-ui,Arial;color:#15233a;background:#f4f7fb}*{box-sizing:border-box}body{margin:0}.top{background:#101828;color:#fff;padding:14px 20px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.top h1{margin:0;font-size:19px}button{border:0;border-radius:8px;padding:9px 13px;cursor:pointer;font-weight:700;background:#185bd5;color:white}button:disabled{opacity:.5;cursor:not-allowed}.wrap{padding:16px;max-width:1440px;margin:auto}.hint{background:#fff;border:1px solid #d7e2f3;border-radius:10px;padding:12px;margin-bottom:12px;font-size:13px}.grid{display:grid;grid-template-columns:minmax(320px,0.85fr) minmax(350px,1.15fr);gap:14px}.list{background:#fff;border:1px solid #d7e2f3;border-radius:12px;max-height:72vh;overflow:auto;padding:10px}.company{padding:10px;margin-bottom:8px;border:1px solid #dae3ee;border-radius:9px;box-shadow:0 2px 6px #1018280a;font-size:12px}.company b{font-size:13px}.company small{color:#667085;display:block;line-height:1.5}.result{margin-top:5px;padding:7px;border-radius:6px;background:#f2f5fa}.good{background:#e8f6ec}.warn{background:#fff4d9}.bad{background:#fff0ec}.map{min-height:72vh;border-radius:12px;border:1px solid #d7e2f3}.stats{font-size:13px;margin:10px 0}.comparebtn{background:#edf3ff;color:#174ea6;border:1px solid #bdd2f6;padding:6px;margin-top:7px;font-size:11px}a{color:#1a64dc} @media(max-width:800px){.grid{grid-template-columns:1fr}.list{max-height:45vh}.map{min-height:50vh}}
+</style></head>
+<body><header class="top"><h1>🧭 ProSense — Comparação com Google Maps</h1><button id="go" disabled>Consultar até 20 endereços</button></header><main class="wrap"><div class="hint"><b>Modo de teste — sem alterações no Supabase.</b> Compara a numeração encontrada pelo Google com o cadastro do ProSense. O resultado é exibido somente no Google Maps. Os dados não são gravados automaticamente. Configure <code>GOOGLE_MAPS_BROWSER_KEY</code> no Railway, restrita ao domínio do aplicativo, com Maps JavaScript API e Geocoding API habilitadas e orçamento/cotas definidos.</div><div id="state" class="stats">Preparando consulta...</div><div class="grid"><div id="companies" class="list"></div><div id="googlemap" class="map"></div></div></main>
+<script>
+const SELECTED = {{ cnpjs|tojson }}.split(',').filter(Boolean);
+const CONFIGURED = {{ configured|tojson }};
+let companies=[],map,geo,info,markers=[],active=false;
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function address(e){return [e.logradouro,e.numero,e.complemento,e.bairro,e.municipio||'Teresina',e.uf||'PI','Brasil'].filter(Boolean).join(', ')}
+function digits(s){return String(s||'').replace(/\D/g,'')}
+function draw(){document.getElementById('companies').innerHTML=companies.map((e,i)=>`<article class="company"><b>${esc(e.nome_fantasia||e.razao_social||e.cnpj)}</b><small>${esc(e.cnpj)}</small><small>${esc(address(e))}</small><div id="res${i}" class="result">Pendente de comparação</div><button class="comparebtn" onclick="focusResult(${i})">Visualizar no Google Maps</button></article>`).join('')}
+function setResult(i,kind,content){let x=document.getElementById('res'+i);if(x){x.className='result '+kind;x.innerHTML=content}}
+async function init(){
+ if(!CONFIGURED){document.getElementById('state').textContent='Chave Google não configurada no Railway. Consulte o arquivo de instruções.';return}
+ if(!window.google?.maps){document.getElementById('state').textContent='Falha ao carregar a API do Google Maps. Verifique chave, domínio, APIs e faturamento.';return}
+ map=new google.maps.Map(document.getElementById('googlemap'),{center:{lat:-5.085, lng:-42.82},zoom:12,mapTypeControl:true});
+ geo=new google.maps.Geocoder();info=new google.maps.InfoWindow();
+ if(!SELECTED.length){document.getElementById('state').textContent='Selecione empresas no mapa do ProSense e abra a comparação.';return}
+ try{const r=await fetch('/api/empresas');const all=await r.json();if(!r.ok||!Array.isArray(all))throw Error(all.erro||'Erro lendo empresas');const lookup=new Map(all.map(x=>[digits(x.cnpj),x]));companies=SELECTED.map(x=>lookup.get(digits(x))).filter(Boolean).slice(0,20);draw();document.getElementById('state').textContent=companies.length+' empresas prontas. Clique em Consultar para iniciar as chamadas ao Google.';document.getElementById('go').disabled=!companies.length}
+ catch(e){document.getElementById('state').textContent=e.message}
+}
+async function geocodeOne(e){return new Promise(resolve=>geo.geocode({address:address(e),componentRestrictions:{country:'BR'}},(items,status)=>resolve({items:items||[],status})))}
+function hasHouseNumber(result,requested){
+ const found=(result.address_components||[]).find(x=>x.types.includes('street_number'))?.long_name||'';
+ return !!(digits(requested)&&digits(found)===digits(requested));
+}
+async function run(){if(active||!geo)return;active=true;document.getElementById('go').disabled=true;
+ let exact=0,approx=0,fail=0;const bounds=new google.maps.LatLngBounds();
+ for(let i=0;i<companies.length;i++){
+ const e=companies[i],q=address(e);setResult(i,'', 'Consultando Google Maps...');let result;
+ try{result=await geocodeOne(e)}catch(err){result={items:[],status:String(err)}}
+ if(result.status==='OK'&&result.items.length){
+  const x=result.items[0],n=hasHouseNumber(x,e.numero),partial=!!x.partial_match;
+  const good=n&&!partial&&x.geometry.location_type==='ROOFTOP';
+  if(good)exact++;else approx++;
+  const kind=good?'good':'warn',quality=good?'Número confirmado, precisão alta':n?'Número encontrado; verificar precisão':'Número NÃO confirmado; posição aproximada';
+  setResult(i,kind,`<b>${esc(quality)}</b><br>${esc(x.formatted_address)}<br>Tipo: ${esc(x.geometry.location_type||'indefinido')}${partial?' · Correspondência parcial':''}`);
+  const mark=new google.maps.Marker({position:x.geometry.location,map,title:q,label:String(i+1)});markers[i]=mark;bounds.extend(x.geometry.location);
+  mark.addListener('click',()=>{info.setContent(`<b>${esc(e.nome_fantasia||e.razao_social||'Empresa')}</b><br>${esc(q)}<hr>${esc(x.formatted_address)}<br>${esc(quality)}`);info.open(map,mark)});
+ } else {fail++;setResult(i,'bad','Sem resultado confirmado ('+esc(result.status)+')')}
+ document.getElementById('state').textContent=`Consultadas ${i+1}/${companies.length} · Número de alta precisão: ${exact} · Aproximadas/revisão: ${approx} · Falhas: ${fail}`;
+ if(i<companies.length-1)await new Promise(resolve=>setTimeout(resolve,240));
+ }
+ if(!bounds.isEmpty())map.fitBounds(bounds);active=false;document.getElementById('go').disabled=false;
+}
+function focusResult(i){const m=markers[i];if(m){map.setCenter(m.getPosition());map.setZoom(18);google.maps.event.trigger(m,'click')}else alert('Faça a comparação primeiro, ou o Google não encontrou este endereço.')}
+document.getElementById('go').onclick=run;
+window.initGoogleProsense=init;
+</script>
+{% if configured %}<script async defer src="https://maps.googleapis.com/maps/api/js?key={{ google_key|urlencode }}&callback=initGoogleProsense&loading=async"></script>{% endif %}
+</body></html>
