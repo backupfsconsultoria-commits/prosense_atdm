@@ -623,12 +623,31 @@ def apagar(cnpj):
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify({'ok':True})
 
+def _geo_cache_key(q):
+    return re.sub(r'\s+', ' ', _norm_lugar(q)).strip()[:220]
+
+def _geo_cache_get(q):
+    try:
+        r=requests.get(url('cache_pesquisas_mapa'), headers=sb_headers(),params={'consulta':'eq.'+_geo_cache_key(q),'select':'resultados,fonte','limit':'1'},timeout=4)
+        if r.ok and r.json():return r.json()[0]
+    except Exception:pass
+    return None
+
+def _geo_cache_save(q,resultados,fonte):
+    if not resultados:return
+    try:
+        payload={'consulta':_geo_cache_key(q),'resultados':resultados,'fonte':fonte}
+        requests.post(url('cache_pesquisas_mapa'),headers=sb_headers('resolution=merge-duplicates,return=minimal'),params={'on_conflict':'consulta'},json=payload,timeout=4)
+    except Exception:pass
+
 @app.route('/api/mapa/buscar-endereco',methods=['GET'])
 def buscar_endereco_no_mapa():
     """Pesquisa pontual por ação do usuário; não escreve coordenadas automaticamente."""
     q=(request.args.get('q') or '').strip()
     if len(q)<3 or len(q)>180:return jsonify({'erro':'Informe entre 3 e 180 caracteres.'}),400
     query=q if 'teresina' in _norm_lugar(q) else q+', Teresina, Piauí, Brasil'
+    cached=_geo_cache_get(query)
+    if cached:return jsonify({'resultados':cached['resultados'],'fonte':cached.get('fonte','cache'),'cache':True})
     resultados=[]
     try:
         # Pesquisa sob demanda: prioriza Geoapify e deixa Nominatim como alternativa.
@@ -641,7 +660,9 @@ def buscar_endereco_no_mapa():
                     if len(coords)!=2:continue
                     valid,lat,lon=_valid_coord(coords[1],coords[0])
                     if valid:resultados.append({'nome':prop.get('formatted') or query,'latitude':lat,'longitude':lon})
-                if resultados:return jsonify({'resultados':resultados,'fonte':'Geoapify'})
+                if resultados:
+                    _geo_cache_save(query,resultados,'Geoapify')
+                    return jsonify({'resultados':resultados,'fonte':'Geoapify'})
         # Endereço encontrado ainda depende de confirmação visual.
         for item in _nominatim_candidatos(query)[:5]:
             ok,lat,lon=_valid_coord(item.get('lat'),item.get('lon'))
@@ -650,6 +671,7 @@ def buscar_endereco_no_mapa():
             cidade=_norm_lugar(addr.get('city') or addr.get('town') or addr.get('municipality') or '')
             if cidade and cidade!='teresina':continue
             resultados.append({'nome':item.get('display_name') or query,'latitude':lat,'longitude':lon})
+        _geo_cache_save(query,resultados,'Nominatim')
         return jsonify({'resultados':resultados})
     except Exception as ex:return jsonify({'erro':str(ex)}),502
 
