@@ -198,14 +198,31 @@ def _merge_planilha_com_cadastro(rows, sobrescrever=False):
         saida.append(patch)
     return saida,novos,existentes
 
-def _upsert_lote(rows,batch=200):
-    for i in range(0,len(rows),batch):
-        parte=rows[i:i+batch]
-        r=requests.post(url(TABLE),headers=sb_headers('resolution=merge-duplicates,return=minimal'),params={'on_conflict':'cnpj'},json=parte,timeout=60)
-        if not r.ok:
-            if 'dados_importados' in r.text or 'origem_importacao' in r.text:
-                raise Exception('Estrutura do banco ainda não atualizada. Execute migracao_v35.sql no Supabase e tente novamente.')
-            raise Exception(f'Falha ao salvar lote no Supabase: {r.status_code} {r.text[:350]}')
+def _upsert_lote(rows, batch=200):
+    """PostgREST exige exatamente as mesmas chaves em todos os objetos de um POST.
+
+    Registros novos trazem todos os campos cadastrais; existentes trazem somente
+    campos que devem ser atualizados. Agrupar por conjunto de chaves preserva
+    os campos antigos sem enviar valores vazios ou nulos por engano.
+    """
+    grupos = {}
+    for row in rows:
+        chave = tuple(sorted(row.keys()))
+        grupos.setdefault(chave, []).append(row)
+    for chave, grupo in grupos.items():
+        for i in range(0, len(grupo), batch):
+            parte = grupo[i:i + batch]
+            r = requests.post(
+                url(TABLE),
+                headers=sb_headers('resolution=merge-duplicates,return=minimal'),
+                params={'on_conflict': 'cnpj'},
+                json=parte,
+                timeout=60,
+            )
+            if not r.ok:
+                if 'dados_importados' in r.text or 'origem_importacao' in r.text:
+                    raise Exception('Estrutura do banco ainda não atualizada. Verifique o SQL de migração de importação no Supabase.')
+                raise Exception(f'Falha ao salvar lote no Supabase: {r.status_code} {r.text[:350]}')
 
 def _link_lote(lista_id,cnpjs,batch=300):
     rows=[{'lista_id':lista_id,'cnpj':c} for c in cnpjs]
