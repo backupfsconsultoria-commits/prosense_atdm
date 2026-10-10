@@ -237,17 +237,75 @@ def _valid_coord(lat, lon):
     except Exception:
         return False, None, None
 
-def _nominatim(q):
-    if not q: return None, None
+def _norm_lugar(v):
+    v=unicodedata.normalize('NFKD',str(v or '')).encode('ascii','ignore').decode('ascii').lower()
+    v=re.sub(r'[^a-z0-9]+',' ',v)
+    return re.sub(r'\s+',' ',v).strip()
+
+def _identificar_endereco(e):
+    """Reconhece quadra/casa/setor mesmo quando misturados ao logradouro ou complemento."""
+    partes=[str(e.get(c) or '') for c in ('logradouro','numero','complemento','bairro')]
+    bruto=' | '.join(partes)
+    rxq=r'\b(?:quadra|qd|qdr|qra|q)\.?\s*[-.:º°n]*\s*(\d+[a-z]?)\b'
+    rxc=r'\b(?:casa|cs|lote|lt)\.?\s*[-.:º°n]*\s*(\d+[a-z]?)\b'
+    rxs=r'\b(?:setor|set)\.?\s*[-.:º°n]*\s*([a-z0-9]+)\b'
+    def ler(rx):
+        m=re.search(rx,bruto,re.IGNORECASE)
+        return m.group(1).upper() if m else ''
+    quadra,casa,setor=ler(rxq),ler(rxc),ler(rxs)
+    numero=str(e.get('numero') or '').strip()
+    if not casa and numero.isdigit() and (quadra or 'casa' in _norm_lugar(bruto)):casa=numero
+    return quadra,casa,setor
+
+def _nominatim_candidatos(q):
+    if not q:return []
     try:
-        r=requests.get('https://nominatim.openstreetmap.org/search', params={
-            'q':q, 'format':'jsonv2', 'limit':1, 'countrycodes':'br', 'addressdetails':1
-        }, headers={'User-Agent':'prosense_atdm/1.1 (field-service geocoder)'}, timeout=20)
-        if r.ok and r.json():
-            ok,lat,lon=_valid_coord(r.json()[0].get('lat'),r.json()[0].get('lon'))
-            if ok:return lat,lon
-    except Exception: pass
+        # Respeita o limite público aproximado de 1 consulta/s por aplicação.
+        time.sleep(1.1)
+        r=requests.get('https://nominatim.openstreetmap.org/search',params={
+          'q':q,'format':'jsonv2','limit':5,'countrycodes':'br','addressdetails':1,
+        },headers={'User-Agent':'ProSense-ATDM/2.0 (endereco estruturado; contato administrador ProSense)'},timeout=20)
+        if r.ok:return r.json() or []
+    except Exception:pass
+    return []
+
+def _nominatim(q):
+    for item in _nominatim_candidatos(q):
+        ok,lat,lon=_valid_coord(item.get('lat'),item.get('lon'))
+        if ok:return lat,lon
     return None,None
+
+def _evidencia_local(item, e, quadra, casa, setor):
+    """Recusa retorno somente por bairro, cidade ou CEP sem evidência específica."""
+    addr=item.get('address') or {}
+    descricao=_norm_lugar(item.get('display_name'))
+    log=_norm_lugar(e.get('logradouro'))
+    match_text=' '.join([descricao]+[_norm_lugar(v) for v in addr.values() if isinstance(v,str)])
+    tipo=item.get('type','')
+    classe=item.get('class','')
+    if tipo in {'city','town','village','municipality','suburb','neighbourhood','quarter','postcode','administrative'} or classe=='boundary':
+        return False
+    # 'house_number' é evidência forte apenas se houver coincidência com o número/casa.
+    num=_norm_lugar(e.get('numero'))
+    numero_ret=_norm_lugar(addr.get('house_number'))
+    if quadra:
+        # A numeração isolada NÃO comprova quadra: 1 pode ser casa, rua ou setor.
+        padrao_q=r'\b(?:quadra|qd|qdr|qra|q)\s*'+re.escape(quadra.lower())+r'\b'
+        if not re.search(padrao_q,match_text):return False
+    if setor:
+        padrao_s=r'\b(?:setor|set)\s*'+re.escape(setor.lower())+r'\b'
+        if not re.search(padrao_s,match_text):return False
+    if casa:
+        padrao_c=r'\b(?:casa|cs|lote|lt)\s*'+re.escape(casa.lower())+r'\b'
+        if not re.search(padrao_c,match_text) and numero_ret!=casa.lower():
+            # Quadra precisa mas sem casa: ainda não é localização de residência.
+            return False
+    if not quadra and not casa:
+        # Para rua convencional (inclusive com setor), exige rua e número.
+        rua_ret=_norm_lugar(addr.get('road') or addr.get('pedestrian') or addr.get('residential'))
+        if not log or not rua_ret or (log not in rua_ret and rua_ret not in log):return False
+        if not num or numero_ret!=num:return False
+    return True
 
 def _nominatim_reverse(lat, lon):
     ok,lat,lon=_valid_coord(lat,lon)
@@ -269,37 +327,41 @@ def _nominatim_reverse(lat, lon):
 
 def geocode_empresa(e):
     ok,lat,lon=_valid_coord(e.get('latitude'),e.get('longitude'))
-    if ok:return lat,lon,'cache'
-    tentativas=[]
-    log=(e.get('logradouro') or '').strip(); num=(e.get('numero') or '').strip(); bairro=(e.get('bairro') or '').strip()
-    mun=(e.get('municipio') or 'Teresina').strip(); uf=(e.get('uf') or 'PI').strip(); cep=digits(e.get('cep'))
-    if log:
-        tentativas.append(', '.join(x for x in [log,num,bairro,mun,uf,'Brasil'] if x))
-        tentativas.append(', '.join(x for x in [log,bairro,mun,uf,'Brasil'] if x))
-    if len(cep)==8:
-        # Primeiro tenta o CEP no BrasilAPI; só aceita coordenadas plausíveis no Brasil.
-        try:
-            r=requests.get(BRASIL_CEP+cep,timeout=15)
-            if r.ok:
-                c=r.json().get('location',{}).get('coordinates',{}) or {}
-                ok,la,lo=_valid_coord(c.get('latitude'),c.get('longitude'))
-                if ok: lat,lon=la,lo
-        except Exception: pass
-        if lat is None: tentativas.append(f'{cep}, {mun}, {uf}, Brasil')
-    usado=''
-    if lat is None:
-        vistos=set()
-        for q in tentativas:
-            if not q or q in vistos:continue
-            vistos.add(q); usado=q
-            lat,lon=_nominatim(q)
-            if lat is not None:break
-            time.sleep(.15)
-    if lat is not None:
-        try:requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f"eq.{e['cnpj']}"},json={'latitude':lat,'longitude':lon},timeout=15)
-        except Exception:pass
-        return lat,lon,usado or 'CEP'
-    return None,None,(tentativas[0] if tentativas else 'Endereço insuficiente')
+    if ok:return lat,lon,'posicao salva (preservada)'
+    log=(e.get('logradouro') or '').strip()
+    num=(e.get('numero') or '').strip()
+    comp=(e.get('complemento') or '').strip()
+    bairro=(e.get('bairro') or '').strip()
+    mun=(e.get('municipio') or 'Teresina').strip()
+    uf=(e.get('uf') or 'PI').strip()
+    quadra,casa,setor=_identificar_endereco(e)
+    base=', '.join(x for x in [bairro,mun,uf,'Brasil'] if x)
+    enderecos=[]
+    if quadra:
+        detalhe=', '.join(x for x in [f'Quadra {quadra}',f'Casa {casa}' if casa else '',f'Setor {setor}' if setor else ''] if x)
+        enderecos.append(', '.join(x for x in [detalhe,bairro,mun,uf,'Brasil'] if x))
+        if log: enderecos.append(', '.join(x for x in [detalhe,log,bairro,mun,uf,'Brasil'] if x))
+        # Os dados de quadra/casa não são descartados para forçar um resultado genérico.
+    else:
+        if log:
+            enderecos.append(', '.join(x for x in [log,num,comp,bairro,mun,uf,'Brasil'] if x))
+            enderecos.append(', '.join(x for x in [log,num,bairro,mun,uf,'Brasil'] if x))
+    if setor and not quadra and log:
+        enderecos.insert(0,', '.join(x for x in [log,num,f'Setor {setor}',bairro,mun,uf,'Brasil'] if x))
+    vistos=set()
+    for q in enderecos[:3]:
+        if not q or q in vistos:continue
+        vistos.add(q)
+        for item in _nominatim_candidatos(q):
+            ok,lat,lon=_valid_coord(item.get('lat'),item.get('lon'))
+            if ok and _evidencia_local(item,e,quadra,casa,setor):
+                try:
+                    requests.patch(url(TABLE),headers=sb_headers('return=minimal'),
+                        params={'cnpj':f"eq.{e['cnpj']}"},
+                        json={'latitude':lat,'longitude':lon},timeout=15)
+                except Exception:pass
+                return lat,lon,'endereco conferido no mapa'
+    return None,None,'Quadra/casa, setor ou numero sem correspondencia exata no OpenStreetMap; conferir manualmente: '+(' / '.join(enderecos[:2]) or base)
 
 IMPORTAR_PLANILHA_HTML = '<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ProSense | Importar planilha</title><style>\n:root{font:16px system-ui,Arial;color:#163047;background:#f2f6fa}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1060px;margin:34px auto;padding:0 16px}.head{display:flex;justify-content:space-between;align-items:center;gap:12px}.logo{font-size:25px;font-weight:800;color:#155d9b}.panel{background:white;border:1px solid #dce6ee;border-radius:14px;padding:24px;margin-top:22px;box-shadow:0 8px 26px #093b5b0b}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}label{display:block;font-weight:650;font-size:14px;margin-bottom:7px}input[type=text],input[type=file]{width:100%;padding:12px;border:1px solid #b9cbd9;border-radius:8px;font:inherit}button,.link{background:#1563a7;color:white;border:0;border-radius:8px;padding:12px 17px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none}button:disabled{opacity:.55;cursor:wait}.muted{color:#617b8f;font-size:13px}.actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}.status{padding:12px;border-radius:8px;margin-top:18px;background:#eaf2f8;white-space:pre-line}.error{background:#fff0ee;color:#a42e28}.success{background:#e7f5ec;color:#155e37}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border-bottom:1px solid #e5edf2;padding:9px;text-align:left;vertical-align:top}th{background:#edf4fa} .tablewrap{overflow:auto}h1{font-size:22px;margin:0}h2{font-size:17px}input[type=checkbox]{transform:scale(1.2);margin-right:7px}@media(max-width:650px){.grid{grid-template-columns:1fr}.panel{padding:15px}}\n</style></head><body><div class="wrap"><div class="head"><div class="logo">ProSense · Importação</div><a href="/" class="link">Voltar ao painel</a></div><section class="panel"><h1>Importar empresas de uma planilha</h1><p class="muted">Importe dados prontos da planilha, sem consultar CNPJ na BrasilAPI. XLSX, XLSM, CSV ou TSV. Até 20 mil linhas e 20 MB.</p><div class="grid"><div><label for="lista">Nome da lista de destino</label><input id="lista" type="text" placeholder="Ex.: MEIs desenquadrados — Teresina" value="MEIs Desenquadrados"></div><div><label for="arquivo">Escolha a planilha</label><input id="arquivo" type="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt"></div></div><p class="muted">Colunas como CNPJ, Razao Social, Nome Fantaria, Tipo Logradouro, Logradouro, Numero, Bairro, CEP, DDD1, Telefone1, E-mail e outros campos são reconhecidos. Os 33 campos originais ficam preservados no banco em <code>dados_importados</code>.</p><label style="font-weight:400"><input id="sobrescrever" type="checkbox">Substituir dados cadastrais já preenchidos nas empresas existentes (visitas, fotos, diagnósticos, observações e coordenadas nunca são substituídos).</label><div class="actions"><button id="validar">1. Conferir planilha</button><button id="salvar" disabled>2. Salvar empresas na lista</button><span id="passo" class="muted">Aguardando arquivo</span></div><div id="status" class="status" style="display:none"></div></section><section class="panel" id="previa" style="display:none"><h2>Prévia das primeiras empresas</h2><div class="tablewrap"><table><thead><tr><th>CNPJ</th><th>Razão social</th><th>Fantasia</th><th>Endereço</th><th>Bairro</th><th>Telefone</th></tr></thead><tbody id="rows"></tbody></table></div><h2>Problemas de importação (até 50)</h2><div id="erros" class="muted"></div></section></div><script>\nconst $=id=>document.getElementById(id);let validado=false;\nfunction mensagem(t,classe=\'\'){const e=$(\'status\');e.style.display=\'block\';e.className=\'status \'+classe;e.textContent=t}\nfunction escapeHtml(s){return String(s??\'\').replace(/[&<>"\']/g,c=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\',"\'":\'&#39;\'}[c]))}\nfunction form(){const f=new FormData();f.append(\'arquivo\',$(\'arquivo\').files[0]);f.append(\'nome_lista\',$(\'lista\').value.trim());f.append(\'sobrescrever\',$(\'sobrescrever\').checked?\'true\':\'false\');return f}\nfunction ocupado(v){$(\'validar\').disabled=v;$(\'salvar\').disabled=v||!validado}\n$(\'arquivo\').addEventListener(\'change\',()=>{validado=false;$(\'salvar\').disabled=true;$(\'previa\').style.display=\'none\';$(\'passo\').textContent=\'Arquivo alterado: confira novamente\'});\n$(\'validar\').onclick=async()=>{if(!$(\'arquivo\').files.length)return mensagem(\'Selecione uma planilha.\',\'error\');validado=false;ocupado(true);mensagem(\'Verificando campos e CNPJs da planilha...\');try{const r=await fetch(\'/api/planilha/validar\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha na validação\');$(\'previa\').style.display=\'block\';$(\'rows\').innerHTML=j.amostra.map(x=>\'<tr>\'+[x.cnpj,x.razao_social,x.nome_fantasia,x.logradouro,x.bairro,x.telefone].map(v=>\'<td>\'+escapeHtml(v)+\'</td>\').join(\'\')+\'</tr>\').join(\'\');$(\'erros\').textContent=j.erros.length?j.erros.map(e=>\'Linha \'+e.linha+\': \'+e.erro).join(\' · \'):\'Nenhum erro detectado\';validado=j.validas>0;mensagem(j.validas+\' empresas válidas; \'+j.ignoradas+\' linhas ignoradas. Nenhum cadastro salvo ainda.\',\'success\');$(\'passo\').textContent=\'Conferência concluída\'}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n$(\'salvar\').onclick=async()=>{if(!validado)return;const destino=$(\'lista\').value.trim();if(!destino)return mensagem(\'Informe o nome da lista.\',\'error\');ocupado(true);mensagem(\'Gravando empresas no Supabase e vinculando à lista. Não feche esta guia durante o envio.\');try{const r=await fetch(\'/api/importar-planilha\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha ao importar\');mensagem(\'Importação concluída!\\nLista: \'+j.lista.nome+\'\\nEmpresas salvas/vinculadas: \'+j.salvas+\'\\nNovas empresas: \'+j.novas+\'\\nJá cadastradas: \'+j.ja_cadastradas+\'\\nLinhas ignoradas: \'+j.ignoradas,\'success\');$(\'passo\').textContent=\'Salvo com sucesso\';validado=false}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n</script></body></html>\n'
 
