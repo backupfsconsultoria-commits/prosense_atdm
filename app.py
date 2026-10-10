@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, render_template_string
 import os, requests, re, csv, io, time, unicodedata, uuid, mimetypes
 from openpyxl import load_workbook
 from datetime import datetime, timezone
@@ -141,17 +141,21 @@ def _parse_planilha(fs):
             erros.append({'linha':idx,'erro':'CNPJ inválido ou ausente'})
             continue
         cf=fmt(c)
-        if cf in vistos:continue
+        if cf in vistos:
+            erros.append({'linha':idx,'erro':'CNPJ repetido na planilha (ignorado)'})
+            continue
         vistos.add(cf)
         tipo=(d.get('tipo_logradouro') or '').strip(); log=(d.get('logradouro') or '').strip()
         logfull=(' '.join(x for x in [tipo,log] if x)).strip()
         cnae=(d.get('cnae') or '').strip(); ramo=(d.get('ramo_de_atividade') or '').strip()
         cnaefull=(f'{cnae} - {ramo}' if cnae and ramo else cnae or ramo)
-        tel=(d.get('telefone1_completo') or d.get('telefone_1_completo') or d.get('telefone1') or d.get('telefone') or d.get('telefone2_completo') or '').strip()
+        tel=(d.get('telefone1_completo') or d.get('telefone_1_completo') or d.get('telefone1') or d.get('telefone') or d.get('telefone2_completo') or d.get('telefone2') or '').strip()
+        ddd=(d.get('ddd1') or d.get('ddd2') or '').strip()
+        if tel and ddd and not digits(tel).startswith(ddd): tel=f'({ddd}) {tel}'
         payload={
           'cnpj':cf,
           'razao_social':d.get('razao_social',''),
-          'nome_fantasia':d.get('nome_fantasia',''),
+          'nome_fantasia':d.get('nome_fantasia') or d.get('nome_fantaria') or '',
           'situacao':d.get('situacao',''),
           'cnae':cnaefull,
           'logradouro':logfull,
@@ -168,6 +172,31 @@ def _parse_planilha(fs):
         }
         saida.append(payload)
     return saida,erros
+
+def _merge_planilha_com_cadastro(rows, sobrescrever=False):
+    # Uma leitura paginada evita milhares de consultas individuais à internet.
+    atuais={fmt(e.get('cnpj','')):e for e in _fetch_paginated(TABLE, {'select':'*'})}
+    novos=0; existentes=0; saida=[]
+    campos={'razao_social','nome_fantasia','situacao','cnae','logradouro','numero',
+            'complemento','bairro','cep','municipio','uf','telefone','email'}
+    for d in rows:
+        original=atuais.get(d['cnpj'])
+        if not original:
+            novos+=1; saida.append(d); continue
+        existentes+=1
+        patch={'cnpj':d['cnpj']}
+        for k in campos:
+            novo=d.get(k)
+            if novo not in (None,'') and (sobrescrever or not original.get(k)):
+                patch[k]=novo
+        antigos=original.get('dados_importados') or {}
+        if not isinstance(antigos,dict):antigos={}
+        patch['dados_importados']={**antigos,**d['dados_importados']}
+        if sobrescrever or not original.get('origem_importacao'):
+            patch['origem_importacao']=d['origem_importacao']
+        # Não modificar visitas, diagnósticos, fotos, observações, coordenadas ou status.
+        saida.append(patch)
+    return saida,novos,existentes
 
 def _upsert_lote(rows,batch=200):
     for i in range(0,len(rows),batch):
@@ -254,6 +283,8 @@ def geocode_empresa(e):
         except Exception:pass
         return lat,lon,usado or 'CEP'
     return None,None,(tentativas[0] if tentativas else 'Endereço insuficiente')
+
+IMPORTAR_PLANILHA_HTML = '<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ProSense | Importar planilha</title><style>\n:root{font:16px system-ui,Arial;color:#163047;background:#f2f6fa}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1060px;margin:34px auto;padding:0 16px}.head{display:flex;justify-content:space-between;align-items:center;gap:12px}.logo{font-size:25px;font-weight:800;color:#155d9b}.panel{background:white;border:1px solid #dce6ee;border-radius:14px;padding:24px;margin-top:22px;box-shadow:0 8px 26px #093b5b0b}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}label{display:block;font-weight:650;font-size:14px;margin-bottom:7px}input[type=text],input[type=file]{width:100%;padding:12px;border:1px solid #b9cbd9;border-radius:8px;font:inherit}button,.link{background:#1563a7;color:white;border:0;border-radius:8px;padding:12px 17px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none}button:disabled{opacity:.55;cursor:wait}.muted{color:#617b8f;font-size:13px}.actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}.status{padding:12px;border-radius:8px;margin-top:18px;background:#eaf2f8;white-space:pre-line}.error{background:#fff0ee;color:#a42e28}.success{background:#e7f5ec;color:#155e37}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border-bottom:1px solid #e5edf2;padding:9px;text-align:left;vertical-align:top}th{background:#edf4fa} .tablewrap{overflow:auto}h1{font-size:22px;margin:0}h2{font-size:17px}input[type=checkbox]{transform:scale(1.2);margin-right:7px}@media(max-width:650px){.grid{grid-template-columns:1fr}.panel{padding:15px}}\n</style></head><body><div class="wrap"><div class="head"><div class="logo">ProSense · Importação</div><a href="/" class="link">Voltar ao painel</a></div><section class="panel"><h1>Importar empresas de uma planilha</h1><p class="muted">Importe dados prontos da planilha, sem consultar CNPJ na BrasilAPI. XLSX, XLSM, CSV ou TSV. Até 20 mil linhas e 20 MB.</p><div class="grid"><div><label for="lista">Nome da lista de destino</label><input id="lista" type="text" placeholder="Ex.: MEIs desenquadrados — Teresina" value="MEIs Desenquadrados"></div><div><label for="arquivo">Escolha a planilha</label><input id="arquivo" type="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt"></div></div><p class="muted">Colunas como CNPJ, Razao Social, Nome Fantaria, Tipo Logradouro, Logradouro, Numero, Bairro, CEP, DDD1, Telefone1, E-mail e outros campos são reconhecidos. Os 33 campos originais ficam preservados no banco em <code>dados_importados</code>.</p><label style="font-weight:400"><input id="sobrescrever" type="checkbox">Substituir dados cadastrais já preenchidos nas empresas existentes (visitas, fotos, diagnósticos, observações e coordenadas nunca são substituídos).</label><div class="actions"><button id="validar">1. Conferir planilha</button><button id="salvar" disabled>2. Salvar empresas na lista</button><span id="passo" class="muted">Aguardando arquivo</span></div><div id="status" class="status" style="display:none"></div></section><section class="panel" id="previa" style="display:none"><h2>Prévia das primeiras empresas</h2><div class="tablewrap"><table><thead><tr><th>CNPJ</th><th>Razão social</th><th>Fantasia</th><th>Endereço</th><th>Bairro</th><th>Telefone</th></tr></thead><tbody id="rows"></tbody></table></div><h2>Problemas de importação (até 50)</h2><div id="erros" class="muted"></div></section></div><script>\nconst $=id=>document.getElementById(id);let validado=false;\nfunction mensagem(t,classe=\'\'){const e=$(\'status\');e.style.display=\'block\';e.className=\'status \'+classe;e.textContent=t}\nfunction escapeHtml(s){return String(s??\'\').replace(/[&<>"\']/g,c=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\',"\'":\'&#39;\'}[c]))}\nfunction form(){const f=new FormData();f.append(\'arquivo\',$(\'arquivo\').files[0]);f.append(\'nome_lista\',$(\'lista\').value.trim());f.append(\'sobrescrever\',$(\'sobrescrever\').checked?\'true\':\'false\');return f}\nfunction ocupado(v){$(\'validar\').disabled=v;$(\'salvar\').disabled=v||!validado}\n$(\'arquivo\').addEventListener(\'change\',()=>{validado=false;$(\'salvar\').disabled=true;$(\'previa\').style.display=\'none\';$(\'passo\').textContent=\'Arquivo alterado: confira novamente\'});\n$(\'validar\').onclick=async()=>{if(!$(\'arquivo\').files.length)return mensagem(\'Selecione uma planilha.\',\'error\');validado=false;ocupado(true);mensagem(\'Verificando campos e CNPJs da planilha...\');try{const r=await fetch(\'/api/planilha/validar\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha na validação\');$(\'previa\').style.display=\'block\';$(\'rows\').innerHTML=j.amostra.map(x=>\'<tr>\'+[x.cnpj,x.razao_social,x.nome_fantasia,x.logradouro,x.bairro,x.telefone].map(v=>\'<td>\'+escapeHtml(v)+\'</td>\').join(\'\')+\'</tr>\').join(\'\');$(\'erros\').textContent=j.erros.length?j.erros.map(e=>\'Linha \'+e.linha+\': \'+e.erro).join(\' · \'):\'Nenhum erro detectado\';validado=j.validas>0;mensagem(j.validas+\' empresas válidas; \'+j.ignoradas+\' linhas ignoradas. Nenhum cadastro salvo ainda.\',\'success\');$(\'passo\').textContent=\'Conferência concluída\'}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n$(\'salvar\').onclick=async()=>{if(!validado)return;const destino=$(\'lista\').value.trim();if(!destino)return mensagem(\'Informe o nome da lista.\',\'error\');ocupado(true);mensagem(\'Gravando empresas no Supabase e vinculando à lista. Não feche esta guia durante o envio.\');try{const r=await fetch(\'/api/importar-planilha\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha ao importar\');mensagem(\'Importação concluída!\\nLista: \'+j.lista.nome+\'\\nEmpresas salvas/vinculadas: \'+j.salvas+\'\\nNovas empresas: \'+j.novas+\'\\nJá cadastradas: \'+j.ja_cadastradas+\'\\nLinhas ignoradas: \'+j.ignoradas,\'success\');$(\'passo\').textContent=\'Salvo com sucesso\';validado=false}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n</script></body></html>\n'
 
 @app.route('/')
 def home(): return render_template('index.html')
@@ -371,20 +402,44 @@ def importar():
         if i<len(vals)-1:time.sleep(.15)
     return jsonify({'ok':ok,'erros':erros,'lista':lista})
 
+@app.route('/api/planilha/validar',methods=['POST'])
+def validar_planilha():
+    fs=request.files.get('arquivo')
+    if not fs or not fs.filename:return jsonify({'erro':'Selecione uma planilha.'}),400
+    try:
+        rows,erros=_parse_planilha(fs)
+        return jsonify({'ok':True,'validas':len(rows),'ignoradas':len(erros),
+                        'amostra':[{'cnpj':e['cnpj'],'razao_social':e['razao_social'],
+                                   'nome_fantasia':e['nome_fantasia'],'logradouro':e['logradouro'],
+                                   'bairro':e['bairro'],'telefone':e['telefone']}
+                                  for e in rows[:8]],'erros':erros[:50],
+                        'colunas_identificadas':list(rows[0]['dados_importados']) if rows else []})
+    except ValueError as e:return jsonify({'erro':str(e)}),400
+    except Exception as e:return jsonify({'erro':str(e)}),500
+
 @app.route('/api/importar-planilha',methods=['POST'])
 def importar_planilha():
     fs=request.files.get('arquivo'); nome=(request.form.get('nome_lista') or '').strip()
     if not nome:return jsonify({'erro':'Informe o nome da lista.'}),400
     if not fs or not fs.filename:return jsonify({'erro':'Selecione uma planilha.'}),400
     try:
-        lista=get_or_create_list(nome)
+        # Conferência apenas em /api/planilha/validar; esta rota salva de verdade.
         rows,erros=_parse_planilha(fs)
         if not rows:return jsonify({'erro':'Nenhuma linha válida com CNPJ foi encontrada.','erros':erros[:50]}),400
-        _upsert_lote(rows)
+        sobrescrever=request.form.get('sobrescrever')=='true'
+        merged,novos,existentes=_merge_planilha_com_cadastro(rows,sobrescrever)
+        lista=get_or_create_list(nome)
+        _upsert_lote(merged)
         _link_lote(lista['id'],[x['cnpj'] for x in rows])
-        return jsonify({'ok':True,'lista':lista,'lidas':len(rows)+len(erros),'salvas':len(rows),'ignoradas':len(erros),'erros':erros[:50]})
+        return jsonify({'ok':True,'lista':lista,'lidas':len(rows)+len(erros),
+                        'salvas':len(rows),'novas':novos,'ja_cadastradas':existentes,
+                        'ignoradas':len(erros),'erros':erros[:50]})
     except ValueError as e:return jsonify({'erro':str(e)}),400
     except Exception as e:return jsonify({'erro':str(e)}),500
+
+@app.route('/importar-planilha')
+def tela_importacao_planilha():
+    return render_template_string(IMPORTAR_PLANILHA_HTML)
 
 @app.route('/api/geolocalizacao/reverso',methods=['POST'])
 def geolocalizacao_reverso():
