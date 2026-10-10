@@ -329,9 +329,38 @@ def _nominatim_reverse(lat, lon):
         return {'logradouro':log,'numero':a.get('house_number') or '','bairro':bairro,'cep':digits(a.get('postcode')),'municipio':municipio,'uf':uf,'display_name':j.get('display_name') or ''}
     except Exception:return None
 
+# Geoapify operacional: sem limite diário artificial no ProSense.
+# A franquia e a taxa de requisições continuam sujeitas às regras do Geoapify.
+
+def _geo_operacional(e):
+    key=os.getenv('GEOAPIFY_API_KEY','').strip()
+    if not key:return None
+    log=str(e.get('logradouro') or '').strip(); num=str(e.get('numero') or '').strip()
+    bairro=str(e.get('bairro') or '').strip(); mun=str(e.get('municipio') or 'Teresina').strip()
+    if not log:return None
+    endereco=', '.join(x for x in [log,num,bairro,mun,str(e.get('uf') or 'PI'),'Brasil'] if x)
+    try:
+        r=requests.get('https://api.geoapify.com/v1/geocode/search',params={'text':endereco,'format':'geojson','filter':'countrycode:br','limit':5,'lang':'pt','apiKey':key},timeout=17)
+        if not r.ok:return ('erro',f'Geoapify HTTP {r.status_code}')
+        res=_geoapify_resultado(e,(r.json() or {}).get('features') or [])
+        if res.get('status')=='numero_confirmado' and res.get('latitude') is not None:
+            return ('exato',res)
+        if res.get('status')=='rua_aproximada':
+            return ('aproximado',res)
+        return ('nao_localizado','Geoapify não confirmou rua e número')
+    except Exception as exc:return ('erro',f'Geoapify: {str(exc)[:90]}')
+
 def geocode_empresa(e):
     ok,lat,lon=_valid_coord(e.get('latitude'),e.get('longitude'))
     if ok:return lat,lon,'posição anteriormente salva'
+    tentativa_geo=_geo_operacional(e)
+    if tentativa_geo and tentativa_geo[0]=='exato':
+        res=tentativa_geo[1]; lat=res['latitude'];lon=res['longitude']
+        # Só persistimos quando há correspondência confirmada de rua e número.
+        try:requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f"eq.{e['cnpj']}"},json={'latitude':lat,'longitude':lon},timeout=15)
+        except Exception:pass
+        return lat,lon,'Geoapify: rua e número conferidos'
+    # Buscas Nominatim ainda disponíveis para quadras/setores e instalações sem API.
     log=(e.get('logradouro') or '').strip();num=(e.get('numero') or '').strip()
     comp=(e.get('complemento') or '').strip();bairro=(e.get('bairro') or '').strip()
     mun=(e.get('municipio') or 'Teresina').strip();uf=(e.get('uf') or 'PI').strip()
@@ -363,7 +392,8 @@ def geocode_empresa(e):
             requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f"eq.{e['cnpj']}"},json={'latitude':lat,'longitude':lon},timeout=15)
         except Exception:pass
         return lat,lon,descricao
-    return None,None,'Sem rua, quadra ou setor verificáveis na fonte do mapa. Revisar manualmente: '+(' / '.join(queries[:2]) or ', '.join(base))
+    detalhe=(tentativa_geo[1] if tentativa_geo and isinstance(tentativa_geo[1],str) else ('Geoapify encontrou apenas a rua; número não confirmado' if tentativa_geo and tentativa_geo[0]=='aproximado' else ''))
+    return None,None,(detalhe+' | ' if detalhe else '')+'Sem endereço exato verificável. Revisar manualmente: '+(' / '.join(queries[:2]) or ', '.join(base))
 
 IMPORTAR_PLANILHA_HTML = '<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ProSense | Importar planilha</title><style>\n:root{font:16px system-ui,Arial;color:#163047;background:#f2f6fa}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1060px;margin:34px auto;padding:0 16px}.head{display:flex;justify-content:space-between;align-items:center;gap:12px}.logo{font-size:25px;font-weight:800;color:#155d9b}.panel{background:white;border:1px solid #dce6ee;border-radius:14px;padding:24px;margin-top:22px;box-shadow:0 8px 26px #093b5b0b}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}label{display:block;font-weight:650;font-size:14px;margin-bottom:7px}input[type=text],input[type=file]{width:100%;padding:12px;border:1px solid #b9cbd9;border-radius:8px;font:inherit}button,.link{background:#1563a7;color:white;border:0;border-radius:8px;padding:12px 17px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none}button:disabled{opacity:.55;cursor:wait}.muted{color:#617b8f;font-size:13px}.actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}.status{padding:12px;border-radius:8px;margin-top:18px;background:#eaf2f8;white-space:pre-line}.error{background:#fff0ee;color:#a42e28}.success{background:#e7f5ec;color:#155e37}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border-bottom:1px solid #e5edf2;padding:9px;text-align:left;vertical-align:top}th{background:#edf4fa} .tablewrap{overflow:auto}h1{font-size:22px;margin:0}h2{font-size:17px}input[type=checkbox]{transform:scale(1.2);margin-right:7px}@media(max-width:650px){.grid{grid-template-columns:1fr}.panel{padding:15px}}\n</style></head><body><div class="wrap"><div class="head"><div class="logo">ProSense · Importação</div><a href="/" class="link">Voltar ao painel</a></div><section class="panel"><h1>Importar empresas de uma planilha</h1><p class="muted">Importe dados prontos da planilha, sem consultar CNPJ na BrasilAPI. XLSX, XLSM, CSV ou TSV. Até 20 mil linhas e 20 MB.</p><div class="grid"><div><label for="lista">Nome da lista de destino</label><input id="lista" type="text" placeholder="Ex.: MEIs desenquadrados — Teresina" value="MEIs Desenquadrados"></div><div><label for="arquivo">Escolha a planilha</label><input id="arquivo" type="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt"></div></div><p class="muted">Colunas como CNPJ, Razao Social, Nome Fantaria, Tipo Logradouro, Logradouro, Numero, Bairro, CEP, DDD1, Telefone1, E-mail e outros campos são reconhecidos. Os 33 campos originais ficam preservados no banco em <code>dados_importados</code>.</p><label style="font-weight:400"><input id="sobrescrever" type="checkbox">Substituir dados cadastrais já preenchidos nas empresas existentes (visitas, fotos, diagnósticos, observações e coordenadas nunca são substituídos).</label><div class="actions"><button id="validar">1. Conferir planilha</button><button id="salvar" disabled>2. Salvar empresas na lista</button><span id="passo" class="muted">Aguardando arquivo</span></div><div id="status" class="status" style="display:none"></div></section><section class="panel" id="previa" style="display:none"><h2>Prévia das primeiras empresas</h2><div class="tablewrap"><table><thead><tr><th>CNPJ</th><th>Razão social</th><th>Fantasia</th><th>Endereço</th><th>Bairro</th><th>Telefone</th></tr></thead><tbody id="rows"></tbody></table></div><h2>Problemas de importação (até 50)</h2><div id="erros" class="muted"></div></section></div><script>\nconst $=id=>document.getElementById(id);let validado=false;\nfunction mensagem(t,classe=\'\'){const e=$(\'status\');e.style.display=\'block\';e.className=\'status \'+classe;e.textContent=t}\nfunction escapeHtml(s){return String(s??\'\').replace(/[&<>"\']/g,c=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\',"\'":\'&#39;\'}[c]))}\nfunction form(){const f=new FormData();f.append(\'arquivo\',$(\'arquivo\').files[0]);f.append(\'nome_lista\',$(\'lista\').value.trim());f.append(\'sobrescrever\',$(\'sobrescrever\').checked?\'true\':\'false\');return f}\nfunction ocupado(v){$(\'validar\').disabled=v;$(\'salvar\').disabled=v||!validado}\n$(\'arquivo\').addEventListener(\'change\',()=>{validado=false;$(\'salvar\').disabled=true;$(\'previa\').style.display=\'none\';$(\'passo\').textContent=\'Arquivo alterado: confira novamente\'});\n$(\'validar\').onclick=async()=>{if(!$(\'arquivo\').files.length)return mensagem(\'Selecione uma planilha.\',\'error\');validado=false;ocupado(true);mensagem(\'Verificando campos e CNPJs da planilha...\');try{const r=await fetch(\'/api/planilha/validar\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha na validação\');$(\'previa\').style.display=\'block\';$(\'rows\').innerHTML=j.amostra.map(x=>\'<tr>\'+[x.cnpj,x.razao_social,x.nome_fantasia,x.logradouro,x.bairro,x.telefone].map(v=>\'<td>\'+escapeHtml(v)+\'</td>\').join(\'\')+\'</tr>\').join(\'\');$(\'erros\').textContent=j.erros.length?j.erros.map(e=>\'Linha \'+e.linha+\': \'+e.erro).join(\' · \'):\'Nenhum erro detectado\';validado=j.validas>0;mensagem(j.validas+\' empresas válidas; \'+j.ignoradas+\' linhas ignoradas. Nenhum cadastro salvo ainda.\',\'success\');$(\'passo\').textContent=\'Conferência concluída\'}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n$(\'salvar\').onclick=async()=>{if(!validado)return;const destino=$(\'lista\').value.trim();if(!destino)return mensagem(\'Informe o nome da lista.\',\'error\');ocupado(true);mensagem(\'Gravando empresas no Supabase e vinculando à lista. Não feche esta guia durante o envio.\');try{const r=await fetch(\'/api/importar-planilha\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha ao importar\');mensagem(\'Importação concluída!\\nLista: \'+j.lista.nome+\'\\nEmpresas salvas/vinculadas: \'+j.salvas+\'\\nNovas empresas: \'+j.novas+\'\\nJá cadastradas: \'+j.ja_cadastradas+\'\\nLinhas ignoradas: \'+j.ignoradas,\'success\');$(\'passo\').textContent=\'Salvo com sucesso\';validado=false}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n</script></body></html>\n'
 
@@ -601,7 +631,18 @@ def buscar_endereco_no_mapa():
     query=q if 'teresina' in _norm_lugar(q) else q+', Teresina, Piauí, Brasil'
     resultados=[]
     try:
-        # Pesquisa exclusivamente sob demanda. Endereço encontrado requer confirmação visual.
+        # Pesquisa sob demanda: prioriza Geoapify e deixa Nominatim como alternativa.
+        key=os.getenv('GEOAPIFY_API_KEY','').strip()
+        if key:
+            gr=requests.get('https://api.geoapify.com/v1/geocode/search',params={'text':query,'format':'geojson','filter':'countrycode:br','limit':5,'lang':'pt','apiKey':key},timeout=15)
+            if gr.ok:
+                for f in (gr.json() or {}).get('features',[])[:5]:
+                    prop=f.get('properties') or {}; coords=(f.get('geometry') or {}).get('coordinates') or []
+                    if len(coords)!=2:continue
+                    valid,lat,lon=_valid_coord(coords[1],coords[0])
+                    if valid:resultados.append({'nome':prop.get('formatted') or query,'latitude':lat,'longitude':lon})
+                if resultados:return jsonify({'resultados':resultados,'fonte':'Geoapify'})
+        # Endereço encontrado ainda depende de confirmação visual.
         for item in _nominatim_candidatos(query)[:5]:
             ok,lat,lon=_valid_coord(item.get('lat'),item.get('lon'))
             if not ok:continue
