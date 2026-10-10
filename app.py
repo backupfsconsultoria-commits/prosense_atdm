@@ -578,6 +578,25 @@ def apagar(cnpj):
     if not r.ok:return jsonify({'erro':r.text}),500
     return jsonify({'ok':True})
 
+@app.route('/api/mapa/buscar-endereco',methods=['GET'])
+def buscar_endereco_no_mapa():
+    """Pesquisa pontual por ação do usuário; não escreve coordenadas automaticamente."""
+    q=(request.args.get('q') or '').strip()
+    if len(q)<3 or len(q)>180:return jsonify({'erro':'Informe entre 3 e 180 caracteres.'}),400
+    query=q if 'teresina' in _norm_lugar(q) else q+', Teresina, Piauí, Brasil'
+    resultados=[]
+    try:
+        # Pesquisa exclusivamente sob demanda. Endereço encontrado requer confirmação visual.
+        for item in _nominatim_candidatos(query)[:5]:
+            ok,lat,lon=_valid_coord(item.get('lat'),item.get('lon'))
+            if not ok:continue
+            addr=item.get('address') or {}
+            cidade=_norm_lugar(addr.get('city') or addr.get('town') or addr.get('municipality') or '')
+            if cidade and cidade!='teresina':continue
+            resultados.append({'nome':item.get('display_name') or query,'latitude':lat,'longitude':lon})
+        return jsonify({'resultados':resultados})
+    except Exception as ex:return jsonify({'erro':str(ex)}),502
+
 @app.route('/api/mapa',methods=['POST'])
 def mapa():
     cnpjs=(request.json or {}).get('cnpjs',[])[:150];pontos=[];nao=[]
