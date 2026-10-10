@@ -295,7 +295,10 @@ def _evidencia_local(item, e, quadra, casa, setor):
     rua_ok=bool(rua and rua_ret and len(rua)>3 and (rua in rua_ret or rua_ret in rua))
     numero=_norm_lugar(e.get('numero')); num_ret=_norm_lugar(a.get('house_number'))
     if rua_ok and numero and numero==num_ret:return 100,'rua e número conferidos'
-    if rua_ok and bairro_ok:return 75,'rua confirmada; número aproximado'
+    if rua_ok and bairro_ok and not numero:
+        return 75,'rua confirmada (sem número cadastrado)'
+    # Rua sem o número pedido não equivale ao imóvel; tentar quadra ou setor.
+
     if not bairro_ok:return None
     def existe_rotulo(rotulos, valor):
         return bool(valor and re.search(r'\b(?:'+rotulos+r')\s*0*'+re.escape(str(valor).lower())+r'\b',contexto))
