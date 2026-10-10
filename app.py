@@ -612,6 +612,69 @@ def buscar_endereco_no_mapa():
         return jsonify({'resultados':resultados})
     except Exception as ex:return jsonify({'erro':str(ex)}),502
 
+# Geoapify: comparação opt-in, nunca grava coordenadas, chave apenas no backend.
+GEOAPIFY_KEY=os.getenv('GEOAPIFY_API_KEY','').strip()
+
+@app.route('/mapa-geoapify')
+def mapa_geoapify():
+    return render_template('mapa_geoapify.html')
+
+@app.route('/api/geoapify/status')
+def geoapify_status():
+    return jsonify({'configurado':bool(GEOAPIFY_KEY),'limite_teste':20})
+
+def _geoapify_addr(row):
+    return ', '.join(str(row.get(k) or '').strip() for k in ('logradouro','numero','complemento','bairro','municipio','uf') if str(row.get(k) or '').strip())+', Brasil'
+
+def _geoapify_resultado(e,features):
+    endereco=_geoapify_addr(e)
+    expected=str(e.get('numero') or '').strip()
+    requested_road=_norm_lugar(e.get('logradouro'))
+    requested_road=re.sub(r'^(rua|av|avenida|travessa|tv)\s+','',requested_road).strip()
+    requested_city=_norm_lugar(e.get('municipio') or 'Teresina')
+    best=None
+    for f in features[:5]:
+        prop=f.get('properties') or {}; geom=f.get('geometry') or {}; coords=geom.get('coordinates') or []
+        if len(coords)!=2:continue
+        valid,la,lo=_valid_coord(coords[1],coords[0])
+        if not valid:continue
+        city=_norm_lugar(prop.get('city') or prop.get('municipality') or '')
+        if city and requested_city and city!=requested_city:continue
+        road=_norm_lugar(prop.get('street') or '')
+        road_match=bool(requested_road and road and (requested_road==road or (len(requested_road)>5 and requested_road in road)))
+        found_num=str(prop.get('housenumber') or '').strip()
+        number_match=bool(expected and found_num and digits(found_num)==digits(expected))
+        confidence=float((prop.get('rank') or {}).get('confidence') or 0)
+        # Número exato depende também de correspondência de rua.
+        status='numero_confirmado' if road_match and number_match else ('rua_aproximada' if road_match else 'nao_confirmado')
+        score=(100 if status=='numero_confirmado' else 50 if status=='rua_aproximada' else 0)+min(confidence,1)*10
+        result={'status':status,'endereco_consultado':endereco,'encontrado':prop.get('formatted') or '', 'latitude':la,'longitude':lo,'numero_informado':expected,'numero_encontrado':found_num,'rua_encontrada':prop.get('street') or '', 'confidence':round(confidence,2),'fonte':'Geoapify'}
+        if best is None or score>best[0]:best=(score,result)
+    return best[1] if best else {'status':'nao_localizado','endereco_consultado':endereco,'encontrado':'','latitude':None,'longitude':None,'fonte':'Geoapify'}
+
+@app.route('/api/geoapify/comparar',methods=['POST'])
+def comparar_geoapify():
+    if not GEOAPIFY_KEY:return jsonify({'erro':'Configure GEOAPIFY_API_KEY no Railway para liberar o teste.'}),503
+    body=request.get_json(silent=True) or {}; cnpjs=body.get('cnpjs')
+    if not isinstance(cnpjs,list) or not (1<=len(cnpjs)<=20):return jsonify({'erro':'Escolha entre 1 e 20 empresas.'}),400
+    ids=list(dict.fromkeys(fmt(str(c)) for c in cnpjs if len(digits(str(c)))==14))
+    if not ids:return jsonify({'erro':'Nenhum CNPJ válido.'}),400
+    out=[]
+    for c in ids:
+        try:
+            e=get_one(c)
+            if not e:
+                out.append({'cnpj':c,'status':'erro','erro':'CNPJ não cadastrado'});continue
+            params={'text':_geoapify_addr(e),'format':'geojson','filter':'countrycode:br','limit':5,'lang':'pt','apiKey':GEOAPIFY_KEY}
+            r=requests.get('https://api.geoapify.com/v1/geocode/search',params=params,timeout=18)
+            if not r.ok:
+                out.append({'cnpj':c,'status':'erro','erro':f'Geoapify HTTP {r.status_code}'});continue
+            res=_geoapify_resultado(e,(r.json() or {}).get('features') or [])
+            res.update({'cnpj':c,'nome_fantasia':e.get('nome_fantasia') or e.get('razao_social') or c})
+            out.append(res)
+        except Exception as exc:out.append({'cnpj':c,'status':'erro','erro':str(exc)[:160]})
+    return jsonify({'resultados':out,'consultadas':len(out),'gravadas':0})
+
 @app.route('/api/mapa',methods=['POST'])
 def mapa():
     cnpjs=(request.json or {}).get('cnpjs',[])[:150];pontos=[];nao=[]
