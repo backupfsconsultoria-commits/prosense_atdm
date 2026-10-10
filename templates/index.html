@@ -45,7 +45,7 @@
 <h3>3. SIMULAÇÃO TRIBUTÁRIA 2027 — IBS/CBS</h3>
 <div id="diagTributacao" class="diagq" style="border:1px solid #dbe3ef;background:#f8fbff"></div>
 <h3>4. SOLUÇÕES E ENVIO</h3><div id="diagSolucoes"></div><h3>Texto para o cliente no WhatsApp</h3><textarea id="diagMensagem" class="messagebox"></textarea><div class="actions"><button class="ghost" onclick="voltarQuestionario()">← Questionário</button><button class="primary" onclick="salvarDiag(false)">Salvar diagnóstico</button><button class="primary" style="background:#128c7e" onclick="salvarDiag(true)">WhatsApp do cliente</button></div></div></div></div></div>
-<div id="mapback" class="modalback" onclick="if(event.target===this)fecharMapa()"><div class="modal" style="width:min(1100px,100%)"><div class="modalhead"><h2 id="mapTitle">Mapa da seleção</h2><button class="close" onclick="fecharMapa()">×</button></div><div class="modalbody"><div class="maplegend"><span><i class="dot p"></i>Pendente</span><span><i class="dot g"></i>1º atendimento</span><span><i class="dot b"></i>2º atendimento</span></div><div class="mapstatus"><b id="mapInfo">Preparando mapa...</b><button id="btnNao" class="warnbtn hidden" onclick="abrirNaoLocalizadas()">⚠ Ver não localizadas</button></div><div class="progressbar"><i id="mapProgress"></i></div><div class="map-searchbar"><input id="mapSearchInput" placeholder="Buscar rua, número, quadra, setor ou bairro em Teresina" onkeydown="if(event.key==='Enter'){event.preventDefault();pesquisarEnderecoMapa()}"><button class="primary" onclick="pesquisarEnderecoMapa()">🔎 Buscar</button></div><div id="mapSearchResults" class="map-search-results hidden"></div><div id="mapSearchSelection" class="map-search-selection hidden"></div><div id="map" class="mapbox"></div></div></div></div>
+<div id="mapback" class="modalback" onclick="if(event.target===this)fecharMapa()"><div class="modal" style="width:min(1100px,100%)"><div class="modalhead"><h2 id="mapTitle">Mapa da seleção</h2><button class="close" onclick="fecharMapa()">×</button></div><div class="modalbody"><div class="maplegend"><span><i class="dot p"></i>Pendente</span><span><i class="dot g"></i>1º atendimento</span><span><i class="dot b"></i>2º atendimento</span></div><div class="mapstatus"><b id="mapInfo">Preparando mapa...</b><button id="btnNao" class="warnbtn hidden" onclick="abrirNaoLocalizadas()">⚠ Ver não localizadas</button></div><div class="progressbar"><i id="mapProgress"></i></div><div class="map-searchbar"><input id="mapSearchInput" placeholder="Digite rua, número, quadra ou setor — sugestões automáticas" oninput="agendarSugestoesMapa()" onkeydown="if(event.key==='Enter'){event.preventDefault();cancelarSugestoesMapa();pesquisarEnderecoMapa()}"><button class="primary" onclick="pesquisarEnderecoMapa()">🔎 Buscar</button></div><div id="mapSearchResults" class="map-search-results hidden"></div><div id="mapSearchSelection" class="map-search-selection hidden"></div><div id="map" class="mapbox"></div></div></div></div>
 <div id="realocarBack" class="modalback" onclick="if(event.target===this)fecharRealocar()" style="z-index:150"><div class="modal" style="max-width:620px"><div class="modalhead"><h2>📍 Realocar no mapa</h2><button class="close" onclick="fecharRealocar()">×</button></div><div class="modalbody"><p id="realocarTexto" style="margin-top:0;color:#475467"></p><div style="padding:11px;border:1px solid #d0d5dd;border-radius:9px;background:#f8fbff"><b>Opção 1 — escolher um novo ponto</b><p style="font-size:12px;color:#667085;margin:5px 0 9px">Feche esta caixa e toque no ponto correto do mapa.</p><button class="primary" onclick="realocarEscolherNoMapa()">🗺 Escolher ponto no mapa</button></div><div style="padding:11px;border:1px solid #d0d5dd;border-radius:9px;background:#fff;margin-top:10px"><b>Opção 2 — incluir em um grupo já existente</b><p style="font-size:12px;color:#667085;margin:5px 0 9px">Escolha uma das caixas aglomeradas que já aparecem neste mapa.</p><select id="realocarGrupoSel" style="width:100%;padding:9px;border:1px solid #d0d5dd;border-radius:8px"></select><button id="btnMoverGrupoExistente" class="ghost" style="margin-top:9px" onclick="moverParaGrupoExistente()">📍 Incluir no grupo selecionado</button></div><div class="actions" style="justify-content:flex-end;margin-top:12px"><button class="ghost" onclick="fecharRealocar()">Cancelar</button></div></div></div></div>
 <div id="naoback" class="modalback" onclick="if(event.target===this)fecharNaoLocalizadas()"><div class="modal" style="max-width:760px"><div class="modalhead"><h2>Empresas sem localização</h2><button class="close" onclick="fecharNaoLocalizadas()">×</button></div><div class="modalbody"><p style="color:#667085">Corrija o endereço pelo botão Editar e depois abra o mapa novamente.</p><div id="naoLista"></div></div></div></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
 let dados=[],atual=null,listas=[],listaAtual=null,filtrados=[],mapa=null,mapLayer=null,naoLocalizados=[],movendoCnpjs=[],realocarCnpjs=[],mapaGruposAtuais=[],unitEmpresa=null,unitLat=null,unitLon=null,editGeoLat=null,editGeoLon=null,fotoCnpj=null,portfolio={areas:[],tipos:[],solucoes:[]},catKind='area',diagEmpresaAtual=null,diagSegmento='servico';
@@ -129,8 +129,19 @@ function abrirRealocar(cnpjs){realocarCnpjs=(cnpjs||[]).map(safeDecode).filter(B
 function fecharRealocar(){realocarBack.classList.remove('open');realocarCnpjs=[]}
 function realocarEscolherNoMapa(){if(!realocarCnpjs.length)return;movendoCnpjs=[...realocarCnpjs];realocarBack.classList.remove('open');realocarCnpjs=[];alert('Agora toque no ponto correto do mapa. A posição será salva para a(s) empresa(s) selecionada(s).')}
 async function moverParaGrupoExistente(){if(!realocarCnpjs.length)return;let g=mapaGruposAtuais.find(x=>String(x.id)===String(realocarGrupoSel.value));if(!g)return alert('Escolha um grupo existente.');if(!confirm(`Incluir ${realocarCnpjs.length} empresa(s) em "${g.label}"?`))return;let cs=[...realocarCnpjs];try{await salvarPosicao(cs,g.lat,g.lon);fecharRealocar();await abrirMapa()}catch(e){alert(e.message)}}
-async function moverNoClique(e){if(!movendoCnpjs.length)return;let cs=[...movendoCnpjs];movendoCnpjs=[];try{await salvarPosicao(cs,e.latlng.lat,e.latlng.lng);await abrirMapa()}catch(err){alert(err.message)}}
-let mapSearchMarker=null,mapSearchPoint=null,mapSearchRequestId=0;
+async function moverNoClique(e){
+ if(!movendoCnpjs.length)return;
+ if(realocandoSemLocal){
+   mapSearchPoint={latitude:e.latlng.lat,longitude:e.latlng.lng,nome:'Ponto escolhido manualmente no mapa'};
+   if(mapSearchMarker&&mapa)mapa.removeLayer(mapSearchMarker);
+   mapSearchMarker=L.marker(e.latlng,{draggable:true}).addTo(mapa);
+   mapSearchMarker.on('dragend',ev=>{let l=ev.target.getLatLng();mapSearchPoint={...mapSearchPoint,latitude:l.lat,longitude:l.lng};mostrarBuscaSelecionada()});
+   mostrarBuscaSelecionada();return;
+ }
+ let cs=[...movendoCnpjs];movendoCnpjs=[];
+ try{await salvarPosicao(cs,e.latlng.lat,e.latlng.lng);await abrirMapa()}catch(err){alert(err.message)}
+}
+let mapSearchMarker=null,mapSearchPoint=null,mapSearchRequestId=0,realocandoSemLocal=false;
 function limparBuscaMapa(limparCampo=false){
  mapSearchRequestId++;mapSearchPoint=null;window.ultimosResultadosMapa=[];
  if(mapSearchMarker&&mapa){mapa.removeLayer(mapSearchMarker)}mapSearchMarker=null;
@@ -140,12 +151,20 @@ function limparBuscaMapa(limparCampo=false){
  if(limparCampo){const input=document.getElementById('mapSearchInput');if(input)input.value=''}
 }
 
-async function pesquisarEnderecoMapa(){
+let sugestoesMapaTimer=null;
+function cancelarSugestoesMapa(){if(sugestoesMapaTimer){clearTimeout(sugestoesMapaTimer);sugestoesMapaTimer=null}}
+function agendarSugestoesMapa(){
+ cancelarSugestoesMapa();
+ const q=document.getElementById('mapSearchInput')?.value.trim()||'';
+ if(q.length<6){let r=document.getElementById('mapSearchResults');if(r){r.classList.add('hidden');r.innerHTML=''}return}
+ sugestoesMapaTimer=setTimeout(()=>{sugestoesMapaTimer=null;pesquisarEnderecoMapa(true)},850);
+}
+async function pesquisarEnderecoMapa(automatico=false){
  const campo=document.getElementById('mapSearchInput'),box=document.getElementById('mapSearchResults'),sel=document.getElementById('mapSearchSelection');
- const q=(campo.value||'').trim();limparBuscaMapa(false);const requestId=++mapSearchRequestId;if(q.length<3){alert('Digite ao menos 3 caracteres para pesquisar.');return}
+ const q=(campo.value||'').trim();limparBuscaMapa(false);const requestId=++mapSearchRequestId;if(q.length<3){if(!automatico)alert('Digite ao menos 3 caracteres para pesquisar.');return}
  box.classList.remove('hidden');box.textContent='Pesquisando endereço...';sel.classList.add('hidden');
  try{let r=await fetch('/api/mapa/buscar-endereco?q='+encodeURIComponent(q));let j=await r.json();if(!r.ok)throw Error(j.erro||'Pesquisa indisponível');
- box.innerHTML=j.resultados.length?j.resultados.map((x,i)=>`<button type="button" onclick="selecionarBuscaMapa(${i})">📍 ${esc(x.nome)}</button>`).join(''):'Nenhum local encontrado. Tente rua sem número ou setor/quadra.';
+ if(requestId!==mapSearchRequestId)return;box.innerHTML=j.resultados.length?j.resultados.map((x,i)=>`<button type="button" onclick="selecionarBuscaMapa(${i})">📍 ${esc(x.nome)}</button>`).join(''):'Nenhum local encontrado. Tente rua sem número ou setor/quadra.';
  window.ultimosResultadosMapa=j.resultados;
  }catch(e){if(requestId===mapSearchRequestId)box.textContent='Erro na busca: '+e.message}
 }
@@ -163,10 +182,47 @@ function mostrarBuscaSelecionada(){
 async function salvarLocalBuscado(){
  if(!mapSearchPoint)return;
  const cs=movendoCnpjs.length?[...movendoCnpjs]:realocarCnpjs.length?[...realocarCnpjs]:[];
- if(!cs.length){alert('Primeiro marque as empresas no agrupamento, clique em Realocar selecionadas e escolha a opção de posicionar no mapa. Depois clique aqui.');return}
+ if(!cs.length){alert('Selecione uma empresa para realocar antes de aplicar o ponto.');return}
  if(!confirm(`Salvar esta localização para ${cs.length} empresa(s)?`))return;
- try{await salvarPosicao(cs,mapSearchPoint.latitude,mapSearchPoint.longitude);movendoCnpjs=[];realocarCnpjs=[];limparBuscaMapa();await abrirMapa()}
+ try{if(realocandoSemLocal&&cs.length===1){await salvarPontoSemLocal(cs,mapSearchPoint)}else{await salvarPosicao(cs,mapSearchPoint.latitude,mapSearchPoint.longitude)}movendoCnpjs=[];realocarCnpjs=[];realocandoSemLocal=false;limparBuscaMapa();await abrirMapa()}
  catch(e){alert('Falha ao salvar localização: '+e.message)}
+}
+function realocarSemLocal(enc){
+ const c=safeDecode(enc);if(!c)return;
+ fecharNaoLocalizadas();
+ if(mapa)mapa.closePopup();
+ limparBuscaMapa(false);
+ movendoCnpjs=[c];realocarCnpjs=[];realocandoSemLocal=true;
+ const e=naoLocalizados.find(x=>x.cnpj===c)||{};
+ const input=document.getElementById('mapSearchInput');
+ if(input)input.value=[e.logradouro,e.numero,e.bairro,e.municipio||'Teresina','PI'].filter(Boolean).join(', ');
+ const info=document.getElementById('mapSearchSelection');
+ if(info){info.classList.remove('hidden');info.innerHTML='<div class="map-search-selected-head"><b>📍 Realocação de '+esc(c)+'</b><button type="button" class="map-search-close" title="Cancelar realocação" onclick="cancelarRealocacaoSemLocal()">×</button></div><small>Pesquise um endereço acima ou clique no mapa para escolher o ponto. Depois confirme em Aplicar.</small>'}
+ if(mapa)mapa.invalidateSize();
+}
+function cancelarRealocacaoSemLocal(){movendoCnpjs=[];realocandoSemLocal=false;limparBuscaMapa(false)}
+async function enderecoReversoSeguro(lat,lon){
+ try{
+  const r=await fetch('/api/geolocalizacao/reverso',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({latitude:lat,longitude:lon})});
+  if(!r.ok)return null;const j=await r.json();const a=j.endereco||{};
+  // Não substitui o endereço por bairro, CEP ou localidade genérica.
+  return a.logradouro&&String(a.logradouro).trim()?a:null;
+ }catch(e){return null}
+}
+async function salvarPontoSemLocal(cs,point){
+ const c=cs[0],a=await enderecoReversoSeguro(point.latitude,point.longitude);
+ let patch={latitude:point.latitude,longitude:point.longitude};
+ if(a){
+  let descricao=[a.logradouro,a.numero,a.bairro,a.municipio,a.uf].filter(Boolean).join(', ');
+  if(confirm('Endereço encontrado próximo ao ponto escolhido:\n'+descricao+'\n\nDeseja atualizar também os campos do endereço cadastral?\n\nCancelar = manter endereço atual e salvar somente a localização.')){
+   for(const k of ['logradouro','numero','bairro','cep','municipio','uf']){
+    if(a[k]&&String(a[k]).trim())patch[k]=a[k];
+   }
+  }
+ }
+ const r=await fetch('/api/empresa/'+encodeURIComponent(c),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
+ const j=await r.json();if(!r.ok||!j.ok)throw Error(j.erro||'Não foi possível atualizar empresa.');
+ Object.assign(dados.find(x=>x.cnpj===c)||{},patch);
 }
 function fotoDoMapa(enc){abrirFoto(enc)}
 function editarDoMapa(enc){abrirModal(enc)}
@@ -188,10 +244,10 @@ async function abrirMapa(){
    bounds.push([lat,lon])});
  setTimeout(()=>{mapa.invalidateSize();if(bounds.length)mapa.fitBounds(bounds,{padding:[30,30],maxZoom:16})},100);mapProgress.style.width='100%';mapInfo.textContent=`Mapa da seleção: ${cnpjs.length} empresas · 📍 Localizadas: ${pontos.length} · Locais no mapa: ${Object.keys(grupos).length} · ⚠ Sem localização: ${falhas.length}`;if(falhas.length){btnNao.textContent=`⚠ Ver não localizadas (${falhas.length})`;btnNao.classList.remove('hidden')}
 }
-function abrirNaoLocalizadas(){naoLista.innerHTML=naoLocalizados.map(x=>`<div class="unlocrow"><b>${esc(x.cnpj)} — ${esc(txt(x.nome_fantasia))}</b><div>${esc(txt(x.logradouro))}, ${esc(txt(x.numero))} — ${esc(txt(x.bairro))} · CEP ${esc(txt(x.cep))}</div><small>${esc(x.motivo||'Endereço não localizado')}${x.endereco_tentado?' · Tentativa: '+esc(x.endereco_tentado):''}</small><div style="margin-top:7px"><button class="primary" onclick="editarNao('${encodeURIComponent(x.cnpj)}')">✎ Editar endereço</button></div></div>`).join('')||'<p>Nenhuma empresa pendente.</p>';naoback.classList.add('open')}
+function abrirNaoLocalizadas(){naoLista.innerHTML=naoLocalizados.map(x=>`<div class="unlocrow"><b>${esc(x.cnpj)} — ${esc(txt(x.nome_fantasia))}</b><div>${esc(txt(x.logradouro))}, ${esc(txt(x.numero))} — ${esc(txt(x.bairro))} · CEP ${esc(txt(x.cep))}</div><small>${esc(x.motivo||'Endereço não localizado')}${x.endereco_tentado?' · Tentativa: '+esc(x.endereco_tentado):''}</small><div style="margin-top:7px"><button class="primary" onclick="editarNao('${encodeURIComponent(x.cnpj)}')">✎ Editar endereço</button> <button class="primary" onclick="realocarSemLocal('${encodeURIComponent(x.cnpj)}')">📍 Realocar no mapa</button></div></div>`).join('')||'<p>Nenhuma empresa pendente.</p>';naoback.classList.add('open')}
 function fecharNaoLocalizadas(){naoback.classList.remove('open')}
 function editarNao(enc){fecharNaoLocalizadas();fecharMapa();abrirModal(enc)}
-function fecharMapa(){limparBuscaMapa(true);if(mapa)mapa.closePopup();mapback.classList.remove('open');realocarBack.classList.remove('open');movendoCnpjs=[];realocarCnpjs=[];mapaGruposAtuais=[];document.body.style.overflow=''}
+function fecharMapa(){cancelarSugestoesMapa();realocandoSemLocal=false;limparBuscaMapa(true);if(mapa)mapa.closePopup();mapback.classList.remove('open');realocarBack.classList.remove('open');movendoCnpjs=[];realocarCnpjs=[];mapaGruposAtuais=[];document.body.style.overflow=''}
 
 
 const PROBLEMAS_SEGMENTO={
