@@ -276,36 +276,37 @@ def _nominatim(q):
     return None,None
 
 def _evidencia_local(item, e, quadra, casa, setor):
-    """Recusa retorno somente por bairro, cidade ou CEP sem evidência específica."""
-    addr=item.get('address') or {}
-    descricao=_norm_lugar(item.get('display_name'))
-    log=_norm_lugar(e.get('logradouro'))
-    match_text=' '.join([descricao]+[_norm_lugar(v) for v in addr.values() if isinstance(v,str)])
-    tipo=item.get('type','')
-    classe=item.get('class','')
-    if tipo in {'city','town','village','municipality','suburb','neighbourhood','quarter','postcode','administrative'} or classe=='boundary':
-        return False
-    # 'house_number' é evidência forte apenas se houver coincidência com o número/casa.
-    num=_norm_lugar(e.get('numero'))
-    numero_ret=_norm_lugar(addr.get('house_number'))
-    if quadra:
-        # A numeração isolada NÃO comprova quadra: 1 pode ser casa, rua ou setor.
-        padrao_q=r'\b(?:quadra|qd|qdr|qra|q)\s*'+re.escape(quadra.lower())+r'\b'
-        if not re.search(padrao_q,match_text):return False
-    if setor:
-        padrao_s=r'\b(?:setor|set)\s*'+re.escape(setor.lower())+r'\b'
-        if not re.search(padrao_s,match_text):return False
-    if casa:
-        padrao_c=r'\b(?:casa|cs|lote|lt)\s*'+re.escape(casa.lower())+r'\b'
-        if not re.search(padrao_c,match_text) and numero_ret!=casa.lower():
-            # Quadra precisa mas sem casa: ainda não é localização de residência.
-            return False
-    if not quadra and not casa:
-        # Para rua convencional (inclusive com setor), exige rua e número.
-        rua_ret=_norm_lugar(addr.get('road') or addr.get('pedestrian') or addr.get('residential'))
-        if not log or not rua_ret or (log not in rua_ret and rua_ret not in log):return False
-        if not num or numero_ret!=num:return False
-    return True
+    """Score + qualidade: ruas e números primeiro; setor/quadra como aproximação.
+    Nunca confundir cidade ou bairro isolado com uma localização exata.
+    """
+    a=item.get('address') or {}
+    raw=_norm_lugar(item.get('display_name'))
+    contexto=' '.join([raw]+[_norm_lugar(v) for v in a.values() if isinstance(v,str)])
+    mun=_norm_lugar(e.get('municipio') or 'Teresina')
+    if mun and mun not in contexto:return None
+    bairro=_norm_lugar(e.get('bairro'))
+    bairro_ok=(not bairro or bairro in contexto)
+    typ=_norm_lugar(item.get('type')); cl=_norm_lugar(item.get('class'))
+    if typ in ('city','town','village','municipality','suburb','neighbourhood','postcode','administrative') or cl=='boundary':return None
+    rua=_norm_lugar(e.get('logradouro'))
+    rua=re.sub(r'\b(?:quadra|qd|qdr|qra|casa|cs|lote|lt|setor|set)\b.*','',rua).strip()
+    rua=re.sub(r'^(rua|avenida|av|travessa|tv)\s+','',rua).strip()
+    rua_ret=_norm_lugar(a.get('road') or a.get('pedestrian') or a.get('residential') or a.get('street') or '')
+    rua_ok=bool(rua and rua_ret and len(rua)>3 and (rua in rua_ret or rua_ret in rua))
+    numero=_norm_lugar(e.get('numero')); num_ret=_norm_lugar(a.get('house_number'))
+    if rua_ok and numero and numero==num_ret:return 100,'rua e número conferidos'
+    if rua_ok and bairro_ok:return 75,'rua confirmada; número aproximado'
+    if not bairro_ok:return None
+    def existe_rotulo(rotulos, valor):
+        return bool(valor and re.search(r'\b(?:'+rotulos+r')\s*0*'+re.escape(str(valor).lower())+r'\b',contexto))
+    q=existe_rotulo('quadra|qd|qdr|qra',quadra)
+    st=existe_rotulo('setor|set',setor)
+    ca=existe_rotulo('casa|cs|lote|lt',casa) or bool(casa and num_ret==str(casa).lower())
+    if q and ca:return 92,'quadra e casa conferidas'
+    if q and st:return 85,'quadra e setor conferidos; casa aproximada'
+    if q:return 65,'quadra confirmada; casa aproximada'
+    if st:return 55,'setor confirmado; quadra/casa aproximadas'
+    return None
 
 def _nominatim_reverse(lat, lon):
     ok,lat,lon=_valid_coord(lat,lon)
@@ -327,41 +328,39 @@ def _nominatim_reverse(lat, lon):
 
 def geocode_empresa(e):
     ok,lat,lon=_valid_coord(e.get('latitude'),e.get('longitude'))
-    if ok:return lat,lon,'posicao salva (preservada)'
-    log=(e.get('logradouro') or '').strip()
-    num=(e.get('numero') or '').strip()
-    comp=(e.get('complemento') or '').strip()
-    bairro=(e.get('bairro') or '').strip()
-    mun=(e.get('municipio') or 'Teresina').strip()
-    uf=(e.get('uf') or 'PI').strip()
+    if ok:return lat,lon,'posição anteriormente salva'
+    log=(e.get('logradouro') or '').strip();num=(e.get('numero') or '').strip()
+    comp=(e.get('complemento') or '').strip();bairro=(e.get('bairro') or '').strip()
+    mun=(e.get('municipio') or 'Teresina').strip();uf=(e.get('uf') or 'PI').strip()
     quadra,casa,setor=_identificar_endereco(e)
-    base=', '.join(x for x in [bairro,mun,uf,'Brasil'] if x)
-    enderecos=[]
+    base=[bairro,mun,uf,'Brasil']
+    queries=[]
+    # Priorizar endereço convencional antes de usar a quadra como indicação aproximada.
+    if log and not re.match(r'^(?:quadra|qd|qdr|setor|set)\b',_norm_lugar(log)):
+        queries.extend([', '.join(x for x in [log,num,bairro,mun,uf,'Brasil'] if x),
+                        ', '.join(x for x in [log,bairro,mun,uf,'Brasil'] if x)])
     if quadra:
-        detalhe=', '.join(x for x in [f'Quadra {quadra}',f'Casa {casa}' if casa else '',f'Setor {setor}' if setor else ''] if x)
-        enderecos.append(', '.join(x for x in [detalhe,bairro,mun,uf,'Brasil'] if x))
-        if log: enderecos.append(', '.join(x for x in [detalhe,log,bairro,mun,uf,'Brasil'] if x))
-        # Os dados de quadra/casa não são descartados para forçar um resultado genérico.
-    else:
-        if log:
-            enderecos.append(', '.join(x for x in [log,num,comp,bairro,mun,uf,'Brasil'] if x))
-            enderecos.append(', '.join(x for x in [log,num,bairro,mun,uf,'Brasil'] if x))
-    if setor and not quadra and log:
-        enderecos.insert(0,', '.join(x for x in [log,num,f'Setor {setor}',bairro,mun,uf,'Brasil'] if x))
-    vistos=set()
-    for q in enderecos[:3]:
-        if not q or q in vistos:continue
+        queries.append(', '.join(x for x in [f'Quadra {quadra}',f'Setor {setor}' if setor else '',*base] if x))
+        queries.append(', '.join(x for x in [f'Quadra {quadra}',*base] if x))
+    if setor:queries.append(', '.join(x for x in [f'Setor {setor}',*base] if x))
+    # Não pesquisar bairro sozinho: retornaria um ponto genérico enganoso.
+    melhor=None;vistos=set()
+    for q in queries:
+        if q in vistos:continue
         vistos.add(q)
         for item in _nominatim_candidatos(q):
-            ok,lat,lon=_valid_coord(item.get('lat'),item.get('lon'))
-            if ok and _evidencia_local(item,e,quadra,casa,setor):
-                try:
-                    requests.patch(url(TABLE),headers=sb_headers('return=minimal'),
-                        params={'cnpj':f"eq.{e['cnpj']}"},
-                        json={'latitude':lat,'longitude':lon},timeout=15)
-                except Exception:pass
-                return lat,lon,'endereco conferido no mapa'
-    return None,None,'Quadra/casa, setor ou numero sem correspondencia exata no OpenStreetMap; conferir manualmente: '+(' / '.join(enderecos[:2]) or base)
+            ok,la,lo=_valid_coord(item.get('lat'),item.get('lon'))
+            if not ok:continue
+            evidencia=_evidencia_local(item,e,quadra,casa,setor)
+            if evidencia and (melhor is None or evidencia[0]>melhor[0]):melhor=(evidencia[0],la,lo,evidencia[1])
+        if melhor and melhor[0]>=100:break
+    if melhor:
+        _,lat,lon,descricao=melhor
+        try:
+            requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f"eq.{e['cnpj']}"},json={'latitude':lat,'longitude':lon},timeout=15)
+        except Exception:pass
+        return lat,lon,descricao
+    return None,None,'Sem rua, quadra ou setor verificáveis na fonte do mapa. Revisar manualmente: '+(' / '.join(queries[:2]) or ', '.join(base))
 
 IMPORTAR_PLANILHA_HTML = '<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ProSense | Importar planilha</title><style>\n:root{font:16px system-ui,Arial;color:#163047;background:#f2f6fa}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1060px;margin:34px auto;padding:0 16px}.head{display:flex;justify-content:space-between;align-items:center;gap:12px}.logo{font-size:25px;font-weight:800;color:#155d9b}.panel{background:white;border:1px solid #dce6ee;border-radius:14px;padding:24px;margin-top:22px;box-shadow:0 8px 26px #093b5b0b}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}label{display:block;font-weight:650;font-size:14px;margin-bottom:7px}input[type=text],input[type=file]{width:100%;padding:12px;border:1px solid #b9cbd9;border-radius:8px;font:inherit}button,.link{background:#1563a7;color:white;border:0;border-radius:8px;padding:12px 17px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none}button:disabled{opacity:.55;cursor:wait}.muted{color:#617b8f;font-size:13px}.actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}.status{padding:12px;border-radius:8px;margin-top:18px;background:#eaf2f8;white-space:pre-line}.error{background:#fff0ee;color:#a42e28}.success{background:#e7f5ec;color:#155e37}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border-bottom:1px solid #e5edf2;padding:9px;text-align:left;vertical-align:top}th{background:#edf4fa} .tablewrap{overflow:auto}h1{font-size:22px;margin:0}h2{font-size:17px}input[type=checkbox]{transform:scale(1.2);margin-right:7px}@media(max-width:650px){.grid{grid-template-columns:1fr}.panel{padding:15px}}\n</style></head><body><div class="wrap"><div class="head"><div class="logo">ProSense · Importação</div><a href="/" class="link">Voltar ao painel</a></div><section class="panel"><h1>Importar empresas de uma planilha</h1><p class="muted">Importe dados prontos da planilha, sem consultar CNPJ na BrasilAPI. XLSX, XLSM, CSV ou TSV. Até 20 mil linhas e 20 MB.</p><div class="grid"><div><label for="lista">Nome da lista de destino</label><input id="lista" type="text" placeholder="Ex.: MEIs desenquadrados — Teresina" value="MEIs Desenquadrados"></div><div><label for="arquivo">Escolha a planilha</label><input id="arquivo" type="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt"></div></div><p class="muted">Colunas como CNPJ, Razao Social, Nome Fantaria, Tipo Logradouro, Logradouro, Numero, Bairro, CEP, DDD1, Telefone1, E-mail e outros campos são reconhecidos. Os 33 campos originais ficam preservados no banco em <code>dados_importados</code>.</p><label style="font-weight:400"><input id="sobrescrever" type="checkbox">Substituir dados cadastrais já preenchidos nas empresas existentes (visitas, fotos, diagnósticos, observações e coordenadas nunca são substituídos).</label><div class="actions"><button id="validar">1. Conferir planilha</button><button id="salvar" disabled>2. Salvar empresas na lista</button><span id="passo" class="muted">Aguardando arquivo</span></div><div id="status" class="status" style="display:none"></div></section><section class="panel" id="previa" style="display:none"><h2>Prévia das primeiras empresas</h2><div class="tablewrap"><table><thead><tr><th>CNPJ</th><th>Razão social</th><th>Fantasia</th><th>Endereço</th><th>Bairro</th><th>Telefone</th></tr></thead><tbody id="rows"></tbody></table></div><h2>Problemas de importação (até 50)</h2><div id="erros" class="muted"></div></section></div><script>\nconst $=id=>document.getElementById(id);let validado=false;\nfunction mensagem(t,classe=\'\'){const e=$(\'status\');e.style.display=\'block\';e.className=\'status \'+classe;e.textContent=t}\nfunction escapeHtml(s){return String(s??\'\').replace(/[&<>"\']/g,c=>({\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\',"\'":\'&#39;\'}[c]))}\nfunction form(){const f=new FormData();f.append(\'arquivo\',$(\'arquivo\').files[0]);f.append(\'nome_lista\',$(\'lista\').value.trim());f.append(\'sobrescrever\',$(\'sobrescrever\').checked?\'true\':\'false\');return f}\nfunction ocupado(v){$(\'validar\').disabled=v;$(\'salvar\').disabled=v||!validado}\n$(\'arquivo\').addEventListener(\'change\',()=>{validado=false;$(\'salvar\').disabled=true;$(\'previa\').style.display=\'none\';$(\'passo\').textContent=\'Arquivo alterado: confira novamente\'});\n$(\'validar\').onclick=async()=>{if(!$(\'arquivo\').files.length)return mensagem(\'Selecione uma planilha.\',\'error\');validado=false;ocupado(true);mensagem(\'Verificando campos e CNPJs da planilha...\');try{const r=await fetch(\'/api/planilha/validar\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha na validação\');$(\'previa\').style.display=\'block\';$(\'rows\').innerHTML=j.amostra.map(x=>\'<tr>\'+[x.cnpj,x.razao_social,x.nome_fantasia,x.logradouro,x.bairro,x.telefone].map(v=>\'<td>\'+escapeHtml(v)+\'</td>\').join(\'\')+\'</tr>\').join(\'\');$(\'erros\').textContent=j.erros.length?j.erros.map(e=>\'Linha \'+e.linha+\': \'+e.erro).join(\' · \'):\'Nenhum erro detectado\';validado=j.validas>0;mensagem(j.validas+\' empresas válidas; \'+j.ignoradas+\' linhas ignoradas. Nenhum cadastro salvo ainda.\',\'success\');$(\'passo\').textContent=\'Conferência concluída\'}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n$(\'salvar\').onclick=async()=>{if(!validado)return;const destino=$(\'lista\').value.trim();if(!destino)return mensagem(\'Informe o nome da lista.\',\'error\');ocupado(true);mensagem(\'Gravando empresas no Supabase e vinculando à lista. Não feche esta guia durante o envio.\');try{const r=await fetch(\'/api/importar-planilha\',{method:\'POST\',body:form()});const j=await r.json();if(!r.ok)throw Error(j.erro||\'Falha ao importar\');mensagem(\'Importação concluída!\\nLista: \'+j.lista.nome+\'\\nEmpresas salvas/vinculadas: \'+j.salvas+\'\\nNovas empresas: \'+j.novas+\'\\nJá cadastradas: \'+j.ja_cadastradas+\'\\nLinhas ignoradas: \'+j.ignoradas,\'success\');$(\'passo\').textContent=\'Salvo com sucesso\';validado=false}catch(e){mensagem(e.message,\'error\')}finally{ocupado(false)}};\n</script></body></html>\n'
 
@@ -590,6 +589,7 @@ def mapa():
         base={'cnpj':e['cnpj'],'nome_fantasia':e.get('nome_fantasia') or e.get('razao_social') or '',
               'dia_mes_sse':e.get('dia_mes_sse') or '','status_visita':e.get('status_visita',0),
               'bairro':e.get('bairro') or '','logradouro':e.get('logradouro') or '','numero':e.get('numero') or '',
+              'complemento':e.get('complemento') or '',
               'cep':e.get('cep') or '','municipio':e.get('municipio') or '','uf':e.get('uf') or '',
               'foto_url':e.get('foto_url') or ''}
         if lat is not None and lon is not None:
@@ -617,6 +617,21 @@ def atualizar_posicao_mapa():
         except Exception as e: erros.append({'cnpj':c,'erro':str(e)})
     return jsonify({'ok':True,'atualizados':atualizados,'erros':erros,'latitude':lat,'longitude':lon})
 
+
+@app.route('/api/mapa/relocalizar',methods=['POST'])
+def relocalizar_empresas():
+    """Ação explícita do usuário: limpar pontos antigos para nova busca. Não mexe nos outros dados."""
+    cnpjs=(request.json or {}).get('cnpjs') or []
+    if not isinstance(cnpjs,list) or not cnpjs or len(cnpjs)>150:
+        return jsonify({'erro':'Selecione entre 1 e 150 empresas.'}),400
+    atualizados=[];erros=[]
+    for c in dict.fromkeys(fmt(v) for v in cnpjs if len(digits(v))==14):
+        try:
+            r=requests.patch(url(TABLE),headers=sb_headers('return=minimal'),params={'cnpj':f'eq.{c}'},json={'latitude':None,'longitude':None},timeout=20)
+            if r.ok:atualizados.append(c)
+            else:erros.append({'cnpj':c,'erro':r.text[:160]})
+        except Exception as ex:erros.append({'cnpj':c,'erro':str(ex)})
+    return jsonify({'ok':not erros,'atualizados':atualizados,'erros':erros})
 
 @app.route('/api/fs/config',methods=['GET','PUT'])
 def fs_config():
